@@ -27,9 +27,11 @@ pub fn decompress(raw: &[u8]) -> Result<Vec<u8>> {
     match (magic, save_type) {
         (b"PlM", b'1') => {
             let mut out = vec![0u8; ulen];
-            let n = oozextract::Extractor::new()
-                .read_from_slice(body, &mut out)
-                .map_err(|e| Error::Decompress(format!("oodle: {e:?}")))?;
+            let n = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                oozextract::Extractor::new().read_from_slice(body, &mut out)
+            }))
+            .map_err(|_| Error::Decompress("oodle decoder panicked on corrupt input".into()))?
+            .map_err(|e| Error::Decompress(format!("oodle: {e:?}")))?;
             if n != ulen {
                 return Err(Error::Decompress(format!(
                     "oodle produced {n} bytes, expected {ulen}"

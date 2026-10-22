@@ -55,3 +55,20 @@ fn truncated_body_is_error() {
     let raw = std::fs::read(w.join("Players/01C37DCB000000000000000000000000.sav")).unwrap();
     assert!(decompress(&raw[..raw.len() / 2]).is_err());
 }
+
+#[test]
+fn corrupted_oodle_body_is_error_not_panic() {
+    let Some(w) = world() else { return };
+    let raw = std::fs::read(w.join("Players/01C37DCB000000000000000000000000.sav")).unwrap();
+
+    let mut xored = raw.clone();
+    for b in &mut xored[12..] {
+        *b ^= 0x5A;
+    }
+    assert!(decompress(&xored).is_err());
+
+    let mut ff = raw.clone();
+    let end = (12 + 4096).min(ff.len());
+    ff[12..end].fill(0xFF);
+    assert!(decompress(&ff).is_err());
+}
