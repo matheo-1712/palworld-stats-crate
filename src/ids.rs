@@ -8,7 +8,12 @@ use crate::error::{Error, Result};
 pub fn guid_to_string(bytes: &[u8; 16]) -> String {
     let mut out = String::with_capacity(32);
     for i in 0..4 {
-        let word = u32::from_le_bytes([bytes[i * 4], bytes[i * 4 + 1], bytes[i * 4 + 2], bytes[i * 4 + 3]]);
+        let word = u32::from_le_bytes([
+            bytes[i * 4],
+            bytes[i * 4 + 1],
+            bytes[i * 4 + 2],
+            bytes[i * 4 + 3],
+        ]);
         out.push_str(&format!("{word:08X}"));
     }
     out
@@ -143,10 +148,19 @@ mod tests {
     }
     #[test]
     fn platform_id_round_trip() {
-        assert_eq!(PlatformId::from("steam_76561198000000000"), PlatformId::Steam("76561198000000000".into()));
-        assert_eq!(PlatformId::from("xbox_2535400000000000"), PlatformId::Xbox("2535400000000000".into()));
+        assert_eq!(
+            PlatformId::from("steam_76561198000000000"),
+            PlatformId::Steam("76561198000000000".into())
+        );
+        assert_eq!(
+            PlatformId::from("xbox_2535400000000000"),
+            PlatformId::Xbox("2535400000000000".into())
+        );
         assert_eq!(PlatformId::from("psn_1"), PlatformId::Other("psn_1".into()));
         assert_eq!(PlatformId::Steam("1".into()).to_string(), "steam_1");
-        assert_eq!(serde_json::to_string(&PlatformId::Xbox("9".into())).unwrap(), "\"xbox_9\"");
+        assert_eq!(
+            serde_json::to_string(&PlatformId::Xbox("9".into())).unwrap(),
+            "\"xbox_9\""
+        );
     }
 }
