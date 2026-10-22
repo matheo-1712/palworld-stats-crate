@@ -164,30 +164,47 @@ fn level_parse_is_fast() {
 fn parses_real_world() {
     let Some(w) = world() else { return };
     let level = std::fs::read(w.join("Level.sav")).unwrap();
-    let players: Vec<(String, Vec<u8>)> = std::fs::read_dir(w.join("Players"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .map(|p| {
-            (
-                p.file_stem().unwrap().to_string_lossy().into_owned(),
-                std::fs::read(&p).unwrap(),
-            )
-        })
-        .collect();
-    let ws = palworld_stats::save::parse_world(&level, players).unwrap();
+    let read = |with_ext: bool| -> Vec<(String, Vec<u8>)> {
+        std::fs::read_dir(w.join("Players"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .map(|p| {
+                let name = if with_ext {
+                    p.file_name().unwrap().to_string_lossy().into_owned()
+                } else {
+                    p.file_stem().unwrap().to_string_lossy().into_owned()
+                };
+                (name, std::fs::read(&p).unwrap())
+            })
+            .collect()
+    };
+    // File names with the `.sav` extension must work like bare stems.
+    let with_ext = palworld_stats::save::parse_world(&level, read(true)).unwrap();
+    assert_eq!(with_ext.players.len(), 6);
+    assert_eq!(
+        with_ext
+            .players
+            .iter()
+            .filter(|p| p.record.is_some())
+            .count(),
+        6
+    );
+    assert!(with_ext.warnings.is_empty(), "{:?}", with_ext.warnings);
+    let ws = palworld_stats::save::parse_world(&level, read(false)).unwrap();
     assert_eq!(ws.players.len(), 6);
     assert!(
         ws.players
             .iter()
-            .all(|p| p.record.is_some() && p.name.is_some())
+            .all(|p| p.record.is_some() && p.name.is_some() && p.level.unwrap_or(0) > 0)
     );
-    // One real player has no Level property, so require it for at least 5 of 6.
-    let leveled = ws
+    // A player with no Level/Exp property gets the engine defaults.
+    let slowe = ws
         .players
         .iter()
-        .filter(|p| p.level.unwrap_or(0) > 0)
-        .count();
-    assert!(leveled >= 5, "{leveled}");
+        .find(|p| p.uid.as_str().starts_with("5A713712"))
+        .unwrap();
+    assert_eq!(slowe.level, Some(1));
+    assert_eq!(slowe.exp, Some(31));
     assert!(ws.warnings.is_empty(), "{:?}", ws.warnings);
     serde_json::to_string(&ws).unwrap();
 }
@@ -201,11 +218,19 @@ fn dps_and_unknown_files_are_ignored() {
         &level,
         vec![
             ("X_dps".to_string(), junk.clone()),
-            ("LevelMeta".to_string(), junk),
+            ("X_DPS.sav".to_string(), junk.clone()),
+            ("LevelMeta".to_string(), junk.clone()),
+            ("LevelMeta.sav".to_string(), junk.clone()),
         ],
     )
     .unwrap();
     assert!(ws.warnings.is_empty(), "{:?}", ws.warnings);
     assert_eq!(ws.players.len(), 6);
     assert!(ws.players.iter().all(|p| p.record.is_none()));
+
+    let ws =
+        palworld_stats::save::parse_world(&level, vec![("garbage.sav".to_string(), junk)]).unwrap();
+    assert_eq!(ws.warnings.len(), 1, "{:?}", ws.warnings);
+    assert_eq!(ws.warnings[0].path, "Players/garbage.sav");
+    assert_eq!(ws.warnings[0].message, "not a player save file name");
 }

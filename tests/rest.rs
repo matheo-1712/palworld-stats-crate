@@ -84,6 +84,39 @@ async fn other_status_maps_to_status_error() {
 }
 
 #[tokio::test]
+async fn malformed_body_maps_to_unexpected_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+    let client = RestClient::new(server.uri(), "x").unwrap();
+    assert!(matches!(
+        client.metrics().await,
+        Err(Error::UnexpectedResponse(_))
+    ));
+}
+
+#[tokio::test]
+async fn nil_player_id_is_dropped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/api/players"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"players":[
+                {"name":"Loading","accountName":"l","playerId":"00000000000000000000000000000000","userId":"steam_1"},
+                {"name":"Ok","accountName":"o","playerId":"01","userId":"steam_2"}
+            ]})),
+        )
+        .mount(&server)
+        .await;
+    let client = RestClient::new(server.uri(), "x").unwrap();
+    let players = client.players().await.unwrap();
+    assert_eq!(players.len(), 1);
+    assert_eq!(players[0].name, "Ok");
+}
+
+#[tokio::test]
 async fn empty_players_is_empty_vec() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

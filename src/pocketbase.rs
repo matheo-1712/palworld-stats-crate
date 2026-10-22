@@ -212,6 +212,7 @@ pub struct PalworldGuild {
     pub admin: Option<String>,
     pub member_count: u32,
     pub base_count: u32,
+    #[serde(rename = "base_level")]
     pub base_camp_level: i32,
     pub updated_at: String,
 }
@@ -279,6 +280,24 @@ mod tests {
         assert!(json.contains("\"species_captured\":257"), "{json}");
         assert!(!json.contains("pal_capture_by_species"));
         assert!(!json.contains("\"id\""));
+    }
+
+    #[test]
+    fn guild_level_serializes_as_base_level() {
+        let g = PalworldGuild {
+            id: None,
+            server: "s".into(),
+            guild_id: "g".into(),
+            name: "n".into(),
+            admin: None,
+            member_count: 1,
+            base_count: 1,
+            base_camp_level: 4,
+            updated_at: "t".into(),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains("\"base_level\":4"), "{json}");
+        assert!(!json.contains("base_camp_level"), "{json}");
     }
 
     #[test]

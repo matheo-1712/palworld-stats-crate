@@ -108,6 +108,7 @@ pub struct ParseOptions<'a> {
     /// StructProperty keys are property lists rather than a raw 16-byte Guid.
     pub struct_keys: &'a [&'a str],
     /// Returns true for paths to keep as Value::Raw without decoding (skipped by size).
+    /// Skipped values are an empty `Value::Raw`: the payload is not copied.
     pub skip: &'a dyn Fn(&str) -> bool,
 }
 
@@ -250,7 +251,7 @@ impl<'a> Reader<'a> {
         let payload = self.bytes(size)?;
         let prop_path = format!("{path}.{name}");
         if (opts.skip)(&prop_path) {
-            return Ok(Value::Raw(payload.to_vec()));
+            return Ok(Value::Raw(Vec::new()));
         }
         let mut sub = Reader::with_base(payload, start, self.depth);
         let outcome = sub.payload(&ty, &header, &prop_path, opts).and_then(|v| {
@@ -1015,8 +1016,8 @@ mod tests {
         };
         let (_, p, w) = parse(&data, &o).unwrap();
         assert!(w.is_empty(), "{w:?}");
-        assert!(matches!(p.get("S"), Some(Value::Raw(b)) if !b.is_empty()));
-        assert_eq!(p.get("Junk"), Some(&Value::Raw(vec![1, 2])));
+        assert_eq!(p.get("S"), Some(&Value::Raw(Vec::new())));
+        assert_eq!(p.get("Junk"), Some(&Value::Raw(Vec::new())));
         assert_eq!(p.int("After"), Some(7));
     }
 

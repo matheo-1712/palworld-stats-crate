@@ -27,7 +27,7 @@ palworld-stats = { git = "https://github.com/<organisation>/palworld-stats", fea
 ```rust
 use palworld_stats::{
     LogEventKind, PresenceEvent, RestClient, diff_presence, parse_log_line,
-    save::parse_world,
+    parse_world,
 };
 
 let rest = RestClient::new("http://127.0.0.1:8212", admin_password)?;
@@ -72,13 +72,24 @@ for w in &world.warnings { /* journaliser */ }
   doit donc le **persister** (champ `player` de `palworld_characters`). Un personnage jamais
   vu en ligne reste sans lien jusqu'à sa prochaine connexion.
 - **Valeurs absentes** : Unreal omet les propriétés égales à leur valeur par défaut. Une
-  propriété absente de la sauvegarde vaut donc la valeur par défaut du jeu (0), sans
+  propriété absente de la sauvegarde vaut donc la valeur par défaut du jeu (0 ; niveau 1), sans
   avertissement. Seul un type inattendu produit un `ParseWarning`. Un fichier joueur
   illisible devient un avertissement, pas une erreur ; les champs issus de ce fichier sont
   alors `None` (colonnes `null` côté PocketBase).
 - **Format des logs non vérifié** : le format des lignes « joined / left the server » n'a pas
   encore été confronté à de vrais logs du serveur. Le test `log_real_lines` est ignoré en
   attendant des lignes réelles.
+- **Horodatage des logs** : `LogEvent::timestamp` est une heure locale du conteneur, sans
+  fuseau (naïve). `LogEvent` ne porte pas de `PlayerUid` : une session issue des logs est
+  rattachée à un personnage via le lien `PlatformId` <-> `PlayerUid` persisté lors des
+  sondages REST.
+- **Oodle et `panic`** : la décompression Oodle est protégée par un garde `catch_unwind`, qui
+  exige `panic = "unwind"`. Ne pas compiler Otternel avec `panic = "abort"`.
+- **Noms de fichiers** : `parse_world` accepte les noms de fichiers joueur avec ou sans
+  `.sav` (insensible à la casse). `*_dps`, `Level` et `LevelMeta` sont ignorés sans bruit ;
+  tout autre nom invalide produit un `ParseWarning` (`Players/<nom>`).
+- **Erreurs REST** : `Error::Http` (serveur injoignable), `Unauthorized` (401), `Status(n)`
+  (autre statut non 2xx) et `UnexpectedResponse` (corps JSON illisible) sont distincts.
 - **Dernière connexion** : `PlayerRecord::last_online` vient du fichier joueur. Les ticks de
   `GuildMember::last_online_ticks` sont relatifs au serveur et ne doivent jamais être
   convertis en date.
@@ -94,7 +105,7 @@ for w in &world.warnings { /* journaliser */ }
 | `palworld_stats` | `PalworldStats` | valeurs courantes, 1:1 avec le personnage : tous les compteurs ci-dessous, `playtime_seconds`, `updated_at` |
 | `palworld_sessions` | `PalworldSession` | `server`, `character`, `started_at`, `ended_at`, `duration_seconds`, `source` (`log` ou `poll`) |
 | `palworld_stats_snapshots` | `PalworldStatsSnapshot` | historique : `taken_at`, `playtime_seconds`, `level`, `exp`, `pal_capture_count`, `paldeck_unique`, `boss_defeated` (boss normaux + boss de tour). Un snapshot seulement si `differs_from` |
-| `palworld_guilds` | `PalworldGuild` | `server`, `guild_id`, `name`, `admin`, `member_count`, `base_count`, `base_camp_level`, `updated_at`. Unique (`server`, `guild_id`) |
+| `palworld_guilds` | `PalworldGuild` | `server`, `guild_id`, `name`, `admin`, `member_count`, `base_count`, `base_level`, `updated_at`. Unique (`server`, `guild_id`) |
 
 IDs et relations sont des `String`, les dates du RFC 3339. Les valeurs inconnues sont des
 `Option` sérialisées en `null`. Le temps de jeu est calculé par Otternel (somme des sessions).

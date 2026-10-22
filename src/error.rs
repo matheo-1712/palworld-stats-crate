@@ -2,6 +2,7 @@ use serde::Serialize;
 
 /// Errors returned by this crate.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("invalid save header: {0}")]
     InvalidHeader(String),
@@ -15,6 +16,8 @@ pub enum Error {
     Unauthorized,
     #[error("unexpected http status {0}")]
     Status(u16),
+    #[error("unexpected response body: {0}")]
+    UnexpectedResponse(String),
     #[error("invalid id: {0}")]
     InvalidId(String),
 }

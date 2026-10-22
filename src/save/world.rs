@@ -98,11 +98,23 @@ fn merge(level: LevelSave, records: Vec<PlayerRecord>, warnings: Vec<ParseWarnin
     }
 }
 
+/// Strips a trailing `.sav` (case-insensitive) from a file name.
+fn strip_sav(name: &str) -> &str {
+    let n = name.len();
+    if n >= 4 && name.is_char_boundary(n - 4) && name[n - 4..].eq_ignore_ascii_case(".sav") {
+        &name[..n - 4]
+    } else {
+        name
+    }
+}
+
 /// Parses `Level.sav` and the player files and merges them by `PlayerUid`.
 ///
 /// `players`: (file stem, raw bytes) from the `Players/` directory, e.g.
-/// `("01C37DCB000000000000000000000000", bytes)`. Stems ending in `_dps` or not
-/// parseable as a `PlayerUid` are ignored. A player file that fails to parse becomes a
+/// `("01C37DCB000000000000000000000000", bytes)`. The file name may keep its `.sav`
+/// extension (case-insensitive). Names ending in `_dps`, and `LevelMeta`/`Level`, are
+/// ignored silently; any other name that is not a valid `PlayerUid` is skipped with a
+/// warning (path `Players/<name>`). A player file that fails to parse becomes a
 /// warning (path `Players/<stem>`), not an error. Synchronous: call it inside
 /// `tokio::task::spawn_blocking`.
 pub fn parse_world<I>(level: &[u8], players: I) -> Result<WorldStats>
@@ -111,8 +123,17 @@ where
 {
     let (level, mut warnings) = parse_level_save(level)?;
     let mut records = Vec::new();
-    for (stem, bytes) in players {
-        if stem.ends_with("_dps") || PlayerUid::parse(&stem).is_err() {
+    for (name, bytes) in players {
+        let stem = strip_sav(&name).to_string();
+        let lower = stem.to_ascii_lowercase();
+        if lower.ends_with("_dps") || lower == "levelmeta" || lower == "level" {
+            continue;
+        }
+        if PlayerUid::parse(&stem).is_err() {
+            warnings.push(ParseWarning {
+                path: format!("Players/{name}"),
+                message: "not a player save file name".into(),
+            });
             continue;
         }
         match parse_player_save(&bytes) {

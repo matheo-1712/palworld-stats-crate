@@ -170,9 +170,22 @@ fn character(
                     String::new()
                 }),
         };
-        let lvl = opt_int(sp, "Level", &sp_path, w).and_then(|v| u8::try_from(v).ok());
-        let exp = opt_int(sp, "Exp", &sp_path, w);
-        let arena = opt_int(sp, "ArenaRankPoint", &sp_path, w).and_then(|v| i32::try_from(v).ok());
+        // An absent property means the engine default (Level 1, Exp 0, no arena points).
+        let lvl = if sp.get("Level").is_none() {
+            Some(1)
+        } else {
+            opt_int(sp, "Level", &sp_path, w).and_then(|v| u8::try_from(v).ok())
+        };
+        let exp = if sp.get("Exp").is_none() {
+            Some(0)
+        } else {
+            opt_int(sp, "Exp", &sp_path, w)
+        };
+        let arena = if sp.get("ArenaRankPoint").is_none() {
+            Some(0)
+        } else {
+            opt_int(sp, "ArenaRankPoint", &sp_path, w).and_then(|v| i32::try_from(v).ok())
+        };
         let group_id = (raw.group_id != [0u8; 16]).then(|| GuildId::from_guid(&raw.group_id));
         level.players.push(CharacterInfo {
             uid,

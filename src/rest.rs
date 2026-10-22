@@ -183,7 +183,7 @@ impl RestClient {
         }
         resp.json::<T>()
             .await
-            .map_err(|e| Error::Http(e.without_url().to_string()))
+            .map_err(|e| Error::UnexpectedResponse(e.without_url().to_string()))
     }
 
     pub async fn info(&self) -> Result<ServerInfo> {
@@ -207,6 +207,13 @@ impl RestClient {
                     continue;
                 }
             };
+            if uid.is_nil() {
+                log::debug!(
+                    "dropping player {:?} with nil playerId (still loading)",
+                    p.name
+                );
+                continue;
+            }
             out.push(OnlinePlayer {
                 name: p.name,
                 account_name: p.account_name,
