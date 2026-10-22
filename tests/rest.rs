@@ -141,3 +141,9 @@ async fn server_down_is_http_error() {
     let client = RestClient::new("http://127.0.0.1:1", "x").unwrap();
     assert!(matches!(client.info().await, Err(Error::Http(_))));
 }
+
+#[test]
+fn debug_does_not_leak_password() {
+    let c = RestClient::new("http://x", "secret").unwrap();
+    assert!(!format!("{c:?}").contains("secret"));
+}

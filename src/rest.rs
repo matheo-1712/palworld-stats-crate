@@ -7,7 +7,7 @@ use std::time::Duration;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Client for `{base}/v1/api/*`, authenticated with HTTP Basic (`admin`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RestClient {
     http: reqwest::Client,
     base_url: String,
@@ -133,11 +133,20 @@ struct MetricsDto {
     basecampnum: Option<u32>,
 }
 
+impl std::fmt::Debug for RestClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RestClient")
+            .field("base_url", &self.base_url)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
 fn build_http(timeout: Duration) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(timeout)
         .build()
-        .map_err(|e| Error::Http(e.to_string()))
+        .map_err(|e| Error::Http(e.without_url().to_string()))
 }
 
 impl RestClient {
@@ -164,7 +173,7 @@ impl RestClient {
             .basic_auth("admin", Some(&self.password))
             .send()
             .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+            .map_err(|e| Error::Http(e.without_url().to_string()))?;
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(Error::Unauthorized);
@@ -174,7 +183,7 @@ impl RestClient {
         }
         resp.json::<T>()
             .await
-            .map_err(|e| Error::Http(e.to_string()))
+            .map_err(|e| Error::Http(e.without_url().to_string()))
     }
 
     pub async fn info(&self) -> Result<ServerInfo> {
