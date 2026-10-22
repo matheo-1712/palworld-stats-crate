@@ -72,3 +72,48 @@ fn corrupted_oodle_body_is_error_not_panic() {
     ff[12..end].fill(0xFF);
     assert!(decompress(&ff).is_err());
 }
+
+#[test]
+fn parses_real_player_record() {
+    let Some(w) = world() else { return };
+    let raw = std::fs::read(w.join("Players/3C36EC75000000000000000000000000.sav")).unwrap();
+    let (p, warnings) = palworld_stats::save::parse_player_save(&raw).unwrap();
+    assert_eq!(p.uid.as_str(), "3C36EC75000000000000000000000000");
+    let r = &p.records;
+    assert_eq!(r.species_captured, Some(257));
+    assert_eq!(r.normal_dungeon_clear, Some(22));
+    assert_eq!(r.fixed_dungeon_clear, Some(30));
+    assert_eq!(r.oilrig_clear, Some(23));
+    assert_eq!(r.camp_conquered, Some(23));
+    assert_eq!(r.found_treasure, Some(11));
+    assert_eq!(r.mutation_count, Some(45));
+    assert_eq!(r.awakening_count, Some(2));
+    assert_eq!(r.predator_defeated, Some(2));
+    assert_eq!(r.relic_possess, Some(2));
+    assert_eq!(r.game_cleared, Some(true));
+    assert_eq!(r.pal_capture_by_species.len(), 269);
+    assert!(r.paldeck_unlocked.unwrap() > 0 && r.paldeck_unlocked.unwrap() <= 257);
+    assert!(p.unlocked_technologies.unwrap() > 0);
+    assert!(p.last_online.is_some());
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn every_real_player_file_parses() {
+    let Some(w) = world() else { return };
+    let mut n = 0;
+    for entry in std::fs::read_dir(w.join("Players")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !name.ends_with(".sav") || name.ends_with("_dps.sav") {
+            continue;
+        }
+        let raw = std::fs::read(&path).unwrap();
+        let (p, warnings) =
+            palworld_stats::save::parse_player_save(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(p.uid.as_str(), path.file_stem().unwrap().to_string_lossy());
+        eprintln!("{name}: {warnings:?}");
+        n += 1;
+    }
+    assert!(n > 0);
+}
