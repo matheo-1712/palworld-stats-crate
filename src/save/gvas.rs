@@ -128,6 +128,12 @@ const RAW_STRUCTS: &[&str] = &[
     "Matrix",
 ];
 
+/// Maximum nesting depth of property lists (guards against stack overflow).
+const MAX_DEPTH: usize = 128;
+
+/// Cap on capacity preallocated from an untrusted element count.
+const MAX_PREALLOC: usize = 4096;
+
 /// Type-specific part of a property tag.
 enum TagHeader {
     None,
@@ -143,19 +149,22 @@ pub struct Reader<'a> {
     pos: usize,
     /// Absolute offset of `data[0]` in the original buffer (for error offsets).
     base: usize,
+    /// Current property-list nesting depth.
+    depth: usize,
     warnings: Vec<ParseWarning>,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self::with_base(data, 0)
+        Self::with_base(data, 0, 0)
     }
 
-    fn with_base(data: &'a [u8], base: usize) -> Self {
+    fn with_base(data: &'a [u8], base: usize, depth: usize) -> Self {
         Reader {
             data,
             pos: 0,
             base,
+            depth,
             warnings: Vec::new(),
         }
     }
@@ -195,6 +204,16 @@ impl<'a> Reader<'a> {
 
     /// Read property tags until the `"None"` terminator.
     pub fn properties(&mut self, path: &str, opts: &ParseOptions) -> Result<Props> {
+        if self.depth >= MAX_DEPTH {
+            return Err(self.err(format!("nesting deeper than {MAX_DEPTH}")));
+        }
+        self.depth += 1;
+        let out = self.properties_inner(path, opts);
+        self.depth -= 1;
+        out
+    }
+
+    fn properties_inner(&mut self, path: &str, opts: &ParseOptions) -> Result<Props> {
         let mut props = Vec::new();
         loop {
             let name = self.fstring()?;
@@ -233,7 +252,7 @@ impl<'a> Reader<'a> {
         if (opts.skip)(&prop_path) {
             return Ok(Value::Raw(payload.to_vec()));
         }
-        let mut sub = Reader::with_base(payload, start);
+        let mut sub = Reader::with_base(payload, start, self.depth);
         let outcome = sub.payload(&ty, &header, &prop_path, opts).and_then(|v| {
             if sub.eof() {
                 Ok(v)
@@ -323,22 +342,31 @@ impl<'a> Reader<'a> {
                 let size = usize::try_from(size)
                     .map_err(|_| self.err(format!("size {size} too large")))?;
                 let elem_len = size.checked_div(count).unwrap_or(0);
+                self.check_count(count)?;
+                if count > 0 && elem_len == 0 && RAW_STRUCTS.contains(&st.as_str()) {
+                    return Err(self.err(format!("{count} {st} elements in {size} bytes")));
+                }
                 let elem_path = format!("{path}.{prop_name}");
-                let mut values = Vec::with_capacity(count.min(self.remaining()));
+                let mut values = Vec::with_capacity(count.min(MAX_PREALLOC));
                 for _ in 0..count {
+                    let before = self.pos;
                     values.push(self.struct_value(&st, &elem_path, opts, elem_len)?);
+                    self.check_progress(before)?;
                 }
                 Value::Array(values)
             }
             "NameProperty" | "EnumProperty" | "StrProperty" | "IntProperty" => {
-                let mut values = Vec::with_capacity(count.min(self.remaining()));
+                self.check_count(count)?;
+                let mut values = Vec::with_capacity(count.min(MAX_PREALLOC));
                 for _ in 0..count {
+                    let before = self.pos;
                     values.push(match inner {
                         "NameProperty" => Value::Name(self.fstring()?),
                         "EnumProperty" => Value::Enum(self.fstring()?),
                         "StrProperty" => Value::Str(self.fstring()?),
                         _ => Value::Int(self.i32()?),
                     });
+                    self.check_progress(before)?;
                 }
                 Value::Array(values)
             }
@@ -352,10 +380,13 @@ impl<'a> Reader<'a> {
         let struct_key = opts.struct_keys.contains(&path);
         let key_path = format!("{path}.Key");
         let value_path = format!("{path}.Value");
-        let mut entries = Vec::with_capacity(count.min(self.remaining()));
+        self.check_count(count)?;
+        let mut entries = Vec::with_capacity(count.min(MAX_PREALLOC));
         for _ in 0..count {
+            let before = self.pos;
             let k = self.map_element(key, &key_path, opts, !struct_key)?;
             let v = self.map_element(value, &value_path, opts, false)?;
+            self.check_progress(before)?;
             entries.push((k, v));
         }
         Ok(Value::Map(entries))
@@ -386,6 +417,26 @@ impl<'a> Reader<'a> {
     }
 
     // ---- bounded primitives (also used by RawData decoders) ----------------
+
+    /// Every counted element consumes at least one byte, so a count larger
+    /// than the remaining bytes is corrupt (and must not drive a long loop).
+    pub(crate) fn check_count(&self, count: usize) -> Result<()> {
+        if count > self.remaining() {
+            return Err(self.err(format!(
+                "count {count} exceeds {} remaining bytes",
+                self.remaining()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Err if an element read starting at `before` consumed no bytes.
+    pub(crate) fn check_progress(&self, before: usize) -> Result<()> {
+        if self.pos == before {
+            return Err(self.err("element consumed no bytes"));
+        }
+        Ok(())
+    }
 
     pub(crate) fn err(&self, msg: impl Into<String>) -> Error {
         self.err_at(self.pos, msg)
@@ -1021,6 +1072,104 @@ mod tests {
         fstring(&mut bad, "IntProperty");
         bad.extend_from_slice(&u64::MAX.to_le_bytes());
         assert!(parse(&bad, &opts()).is_err());
+    }
+
+    #[test]
+    fn hostile_array_count_is_contained() {
+        let data = doc(|b| {
+            // Array<Struct Vector>: count u32::MAX but a 24-byte inner size.
+            let mut a = u32::MAX.to_le_bytes().to_vec();
+            a.extend(fs("V"));
+            a.extend(fs("StructProperty"));
+            a.extend_from_slice(&24u64.to_le_bytes());
+            a.extend(fs("Vector"));
+            a.extend_from_slice(&[0u8; 17]);
+            a.extend_from_slice(&[0u8; 24]);
+            tag(b, "Vecs", "ArrayProperty", &fs("StructProperty"), &a);
+            // Plausible count but inner size too small: elem_len would be 0.
+            let mut a = 20u32.to_le_bytes().to_vec();
+            a.extend(fs("V"));
+            a.extend(fs("StructProperty"));
+            a.extend_from_slice(&10u64.to_le_bytes());
+            a.extend(fs("Vector"));
+            a.extend_from_slice(&[0u8; 17]);
+            a.extend_from_slice(&[0u8; 24]);
+            tag(b, "Vecs0", "ArrayProperty", &fs("StructProperty"), &a);
+            // Array<Name>: count u32::MAX, one element.
+            let mut a = u32::MAX.to_le_bytes().to_vec();
+            a.extend(fs("x"));
+            tag(b, "Names", "ArrayProperty", &fs("NameProperty"), &a);
+            tag(b, "After", "IntProperty", &[], &7i32.to_le_bytes());
+        });
+        let (_, p, w) = parse(&data, &opts()).unwrap();
+        assert!(matches!(p.get("Vecs"), Some(Value::Raw(_))));
+        assert!(matches!(p.get("Vecs0"), Some(Value::Raw(_))));
+        assert!(matches!(p.get("Names"), Some(Value::Raw(_))));
+        assert_eq!(p.int("After"), Some(7));
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert_eq!(w[0].path, ".Vecs");
+        assert!(w[1].message.contains("Vector elements"), "{:?}", w[1]);
+        assert_eq!(w[2].path, ".Names");
+    }
+
+    #[test]
+    fn hostile_map_count_is_contained() {
+        let data = doc(|b| {
+            let mut m = 0u32.to_le_bytes().to_vec();
+            m.extend_from_slice(&u32::MAX.to_le_bytes());
+            m.extend(fs("a"));
+            m.extend_from_slice(&1i32.to_le_bytes());
+            tag(
+                b,
+                "M",
+                "MapProperty",
+                &map_header("NameProperty", "IntProperty"),
+                &m,
+            );
+            tag(b, "After", "IntProperty", &[], &7i32.to_le_bytes());
+        });
+        let (_, p, w) = parse(&data, &opts()).unwrap();
+        assert!(matches!(p.get("M"), Some(Value::Raw(_))));
+        assert_eq!(p.int("After"), Some(7));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].path, ".M");
+    }
+
+    #[test]
+    fn deep_nesting_is_contained() {
+        // 10_000 nested Struct "Foo" tags, written without copying payloads:
+        // P_0 = None; P_k = tag(S, size P_{k-1}) ++ P_{k-1} ++ None.
+        const LEVELS: usize = 10_000;
+        let none_len = fs("None").len();
+        let mut head = Vec::new();
+        fstring(&mut head, "S");
+        fstring(&mut head, "StructProperty");
+        let size_at = head.len();
+        head.extend_from_slice(&0u64.to_le_bytes());
+        head.extend(guid_struct_header("Foo"));
+        head.push(0);
+        let mut b = header_bytes();
+        for k in (0..LEVELS).rev() {
+            let size = (none_len + k * (head.len() + none_len)) as u64;
+            let start = b.len();
+            b.extend_from_slice(&head);
+            b[start + size_at..start + size_at + 8].copy_from_slice(&size.to_le_bytes());
+        }
+        for _ in 0..=LEVELS {
+            none(&mut b);
+        }
+        none(&mut b);
+        let (_, p, w) = parse(&b, &opts()).unwrap();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].message.contains("nesting"), "{:?}", w[0]);
+        let mut cur = &p;
+        let mut depth = 0;
+        while let Some(next) = cur.struct_props("S") {
+            cur = next;
+            depth += 1;
+        }
+        assert!(matches!(cur.get("S"), Some(Value::Raw(_))));
+        assert_eq!(depth, MAX_DEPTH - 1);
     }
 
     #[test]
