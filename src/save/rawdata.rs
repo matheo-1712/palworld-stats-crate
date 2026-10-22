@@ -1,8 +1,5 @@
 //! Decoders for the Palworld `RawData` byte blobs (characters and groups).
 
-// Consumed by the level.sav walker (Task 6).
-#![allow(dead_code)]
-
 use serde::Serialize;
 
 use crate::Result;
@@ -17,7 +14,8 @@ pub struct CharacterRaw {
     pub group_id: [u8; 16],
 }
 
-/// Properties until `"None"`, 4 unknown bytes, a 16-byte group guid, then EOF.
+/// Properties until `"None"`, 4 unknown bytes, a 16-byte group guid, an optional
+/// 4-byte zero trailer (present in current saves), then EOF.
 pub fn decode_character(bytes: &[u8]) -> Result<CharacterRaw> {
     let mut r = Reader::new(bytes);
     let opts = ParseOptions {
@@ -27,6 +25,9 @@ pub fn decode_character(bytes: &[u8]) -> Result<CharacterRaw> {
     let props = r.properties("", &opts)?;
     r.bytes(4)?;
     let group_id = r.guid()?;
+    if r.remaining() == 4 {
+        r.bytes(4)?;
+    }
     if !r.eof() {
         return Err(r.err(format!("{} trailing bytes after character", r.remaining())));
     }
@@ -67,28 +68,33 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
     let group_name = r.fstring()?;
     skip_guids(&mut r, 2)?;
 
-    // 2. Organisation: type byte and base ids.
-    r.u8()?;
+    // 2. Organisation: type byte, 4 unknown bytes, base ids, 4 unknown bytes.
+    r.bytes(5)?;
     let base_count = skip_guids(&mut r, 1)?;
+    r.bytes(4)?;
 
     // 3. Guild: camp level, a guid list, guild name.
     let base_camp_level = r.i32()?;
     skip_guids(&mut r, 1)?;
     let guild_name = r.fstring()?;
 
-    // 4. Guild: admin and members.
+    // 4. Guild: last name modifier (guid) and 14 further bytes (fixed in current
+    //    saves), then admin and members.
+    r.bytes(30)?;
     let (admin, members) = {
         let admin = PlayerUid::from_guid(&r.guid()?);
         let count = r.i32()?;
         let count =
             usize::try_from(count).map_err(|_| r.err(format!("negative member count {count}")))?;
-        // Each member needs at least 16 + 8 + 4 bytes.
-        r.check_count(count.saturating_mul(28))?;
+        // Each member needs at least 16 + 8 + 4 + 1 bytes.
+        r.check_count(count.saturating_mul(29))?;
         let mut members = Vec::with_capacity(count.min(1024));
         for _ in 0..count {
             let uid = PlayerUid::from_guid(&r.guid()?);
             let last_online_ticks = r.i64()?;
             let name = r.fstring()?;
+            // One extra per-member byte in current saves.
+            r.u8()?;
             members.push(GuildMember {
                 uid,
                 name,
@@ -98,10 +104,7 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
         (admin, members)
     };
 
-    // 5. Nothing may remain.
-    if !r.eof() {
-        return Err(r.err(format!("{} trailing bytes after group", r.remaining())));
-    }
+    // 5. Per-guild trailing data (unmodelled) is ignored.
     Ok(GroupRaw::Guild {
         id: GuildId::from_guid(&group_id),
         name: if guild_name.is_empty() {
@@ -176,6 +179,12 @@ mod tests {
     }
 
     #[test]
+    fn character_with_four_byte_trailer_is_ok() {
+        let c = decode_character(&character_bytes(&[0; 4])).unwrap();
+        assert_eq!(c.group_id, [0xAA; 16]);
+    }
+
+    #[test]
     fn character_trailing_garbage_is_err() {
         assert!(decode_character(&character_bytes(&[1])).is_err());
     }
@@ -205,20 +214,24 @@ mod tests {
     fn guild_bytes(guild_name: &str) -> Vec<u8> {
         let mut b = part1("grp");
         b.push(7);
+        b.extend_from_slice(&[0; 4]);
         b.extend_from_slice(&3u32.to_le_bytes());
         for i in 10..13 {
             b.extend_from_slice(&g(i));
         }
+        b.extend_from_slice(&[0; 4]);
         b.extend_from_slice(&12i32.to_le_bytes());
         b.extend_from_slice(&1u32.to_le_bytes());
         b.extend_from_slice(&g(20));
         b.extend(fs(guild_name));
+        b.extend_from_slice(&[0; 30]);
         b.extend_from_slice(&g(30));
         b.extend_from_slice(&2i32.to_le_bytes());
         for (i, n) in [(30u8, "Alice"), (31, "Bob")] {
             b.extend_from_slice(&g(i));
             b.extend_from_slice(&(i as i64 * 1000).to_le_bytes());
             b.extend(fs(n));
+            b.push(1);
         }
         b
     }
@@ -259,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn guild_trailing_or_truncated_is_err() {
+    fn guild_truncated_is_err_and_trailing_ignored() {
         let mut data = guild_bytes("G");
         let ty = "EPalGroupType::Guild";
         assert!(decode_group(ty, &data).is_ok());
@@ -267,7 +280,7 @@ mod tests {
             assert!(decode_group(ty, &data[..len]).is_err(), "len {len}");
         }
         data.push(0);
-        assert!(decode_group(ty, &data).is_err());
+        assert!(decode_group(ty, &data).is_ok());
     }
 
     #[test]

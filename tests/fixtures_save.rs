@@ -120,3 +120,42 @@ fn every_real_player_file_parses() {
     }
     assert!(n > 0);
 }
+
+#[test]
+fn parses_real_level() {
+    let Some(w) = world() else { return };
+    let (l, warnings) =
+        palworld_stats::save::parse_level_save(&std::fs::read(w.join("Level.sav")).unwrap())
+            .unwrap();
+    assert_eq!(l.players.len(), 6);
+    let rere = l
+        .players
+        .iter()
+        .find(|c| c.uid.as_str() == "3C36EC75000000000000000000000000")
+        .unwrap();
+    assert_eq!(rere.name, "RereBleue");
+    assert_eq!(rere.level, Some(80));
+    assert_eq!(rere.exp, Some(45_859_908));
+    assert_eq!(rere.arena_rank_point, Some(585));
+    assert!(!l.guilds.is_empty());
+    assert!(l.guilds.iter().all(|g| !g.members.is_empty()));
+    assert!(l.owned_pals.values().sum::<u32>() > 0);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    eprintln!(
+        "level: players={} guilds={} owned_pals={}",
+        l.players.len(),
+        l.guilds.len(),
+        l.owned_pals.values().sum::<u32>()
+    );
+}
+
+#[test]
+fn level_parse_is_fast() {
+    let Some(w) = world() else { return };
+    let raw = std::fs::read(w.join("Level.sav")).unwrap();
+    let t = std::time::Instant::now();
+    palworld_stats::save::parse_level_save(&raw).unwrap();
+    let el = t.elapsed();
+    eprintln!("level parse: {el:?}");
+    assert!(el < std::time::Duration::from_secs(3), "{el:?}");
+}

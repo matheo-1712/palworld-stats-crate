@@ -7,3 +7,6 @@ pub(crate) mod rawdata;
 pub use container::decompress;
 mod player;
 pub use player::{PlayerRecord, RecordStats, parse_player_save};
+mod level;
+pub use level::{CharacterInfo, GuildInfo, LevelSave, parse_level_save};
+pub use rawdata::GuildMember;
