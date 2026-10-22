@@ -56,10 +56,10 @@ pub enum GroupRaw {
 
 /// Decode a group `RawData` blob; `group_type` looks like `"EPalGroupType::Guild"`.
 pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
-    let kind = group_type.rsplit("::").next().unwrap_or(group_type);
-    let is_guild = kind == "Guild";
-    let has_camp = is_guild || kind == "IndependentGuild";
-    let has_orgs = has_camp || kind == "Organization";
+    // Only guilds are reported; other group layouts are opaque (never validated).
+    if group_type != "EPalGroupType::Guild" {
+        return Ok(GroupRaw::Other);
+    }
 
     let mut r = Reader::new(bytes);
     // 1. Common header: id, name, character handles (guid pairs).
@@ -68,24 +68,16 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
     skip_guids(&mut r, 2)?;
 
     // 2. Organisation: type byte and base ids.
-    let mut base_count = 0;
-    if has_orgs {
-        r.u8()?;
-        base_count = skip_guids(&mut r, 1)?;
-    }
+    r.u8()?;
+    let base_count = skip_guids(&mut r, 1)?;
 
     // 3. Guild: camp level, a guid list, guild name.
-    let mut base_camp_level = 0;
-    let mut guild_name = String::new();
-    if has_camp {
-        base_camp_level = r.i32()?;
-        skip_guids(&mut r, 1)?;
-        guild_name = r.fstring()?;
-    }
+    let base_camp_level = r.i32()?;
+    skip_guids(&mut r, 1)?;
+    let guild_name = r.fstring()?;
 
     // 4. Guild: admin and members.
-    let mut guild = None;
-    if is_guild {
+    let (admin, members) = {
         let admin = PlayerUid::from_guid(&r.guid()?);
         let count = r.i32()?;
         let count =
@@ -103,27 +95,24 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
                 last_online_ticks,
             });
         }
-        guild = Some((admin, members));
-    }
+        (admin, members)
+    };
 
     // 5. Nothing may remain.
     if !r.eof() {
         return Err(r.err(format!("{} trailing bytes after group", r.remaining())));
     }
-    Ok(match guild {
-        Some((admin, members)) => GroupRaw::Guild {
-            id: GuildId::from_guid(&group_id),
-            name: if guild_name.is_empty() {
-                group_name
-            } else {
-                guild_name
-            },
-            base_camp_level,
-            base_count,
-            admin,
-            members,
+    Ok(GroupRaw::Guild {
+        id: GuildId::from_guid(&group_id),
+        name: if guild_name.is_empty() {
+            group_name
+        } else {
+            guild_name
         },
-        None => GroupRaw::Other,
+        base_camp_level,
+        base_count,
+        admin,
+        members,
     })
 }
 
@@ -297,21 +286,38 @@ mod tests {
             decode_group("EPalGroupType::Neutral", &b).unwrap(),
             GroupRaw::Other
         );
+        // Opaque: trailing bytes are not validated for non-guild types.
         let mut extra = b.clone();
         extra.push(0);
-        assert!(decode_group("EPalGroupType::Neutral", &extra).is_err());
+        assert_eq!(
+            decode_group("EPalGroupType::Neutral", &extra).unwrap(),
+            GroupRaw::Other
+        );
     }
 
     #[test]
-    fn independent_guild_is_other_with_parts_2_3() {
+    fn independent_guild_with_tail_is_other() {
         let mut b = part1("ind");
         b.push(1);
         b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(&1i32.to_le_bytes());
         b.extend_from_slice(&0u32.to_le_bytes());
         b.extend(fs("n"));
+        // group.py IndependentGuild tail.
+        b.extend_from_slice(&g(40));
+        b.extend(fs("n2"));
+        b.extend_from_slice(&5i64.to_le_bytes());
+        b.extend(fs("player"));
         assert_eq!(
             decode_group("EPalGroupType::IndependentGuild", &b).unwrap(),
+            GroupRaw::Other
+        );
+    }
+
+    #[test]
+    fn organization_garbage_is_other() {
+        assert_eq!(
+            decode_group("EPalGroupType::Organization", &[1, 2, 3]).unwrap(),
             GroupRaw::Other
         );
     }
