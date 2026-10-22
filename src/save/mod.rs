@@ -10,3 +10,5 @@ pub use player::{PlayerRecord, RecordStats, parse_player_save};
 mod level;
 pub use level::{CharacterInfo, GuildInfo, LevelSave, parse_level_save};
 pub use rawdata::GuildMember;
+mod world;
+pub use world::{GuildRole, PlayerStats, WorldStats, parse_world};

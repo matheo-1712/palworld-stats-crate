@@ -159,3 +159,53 @@ fn level_parse_is_fast() {
     eprintln!("level parse: {el:?}");
     assert!(el < std::time::Duration::from_secs(3), "{el:?}");
 }
+
+#[test]
+fn parses_real_world() {
+    let Some(w) = world() else { return };
+    let level = std::fs::read(w.join("Level.sav")).unwrap();
+    let players: Vec<(String, Vec<u8>)> = std::fs::read_dir(w.join("Players"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .map(|p| {
+            (
+                p.file_stem().unwrap().to_string_lossy().into_owned(),
+                std::fs::read(&p).unwrap(),
+            )
+        })
+        .collect();
+    let ws = palworld_stats::save::parse_world(&level, players).unwrap();
+    assert_eq!(ws.players.len(), 6);
+    assert!(
+        ws.players
+            .iter()
+            .all(|p| p.record.is_some() && p.name.is_some())
+    );
+    // One real player has no Level property, so require it for at least 5 of 6.
+    let leveled = ws
+        .players
+        .iter()
+        .filter(|p| p.level.unwrap_or(0) > 0)
+        .count();
+    assert!(leveled >= 5, "{leveled}");
+    assert!(ws.warnings.is_empty(), "{:?}", ws.warnings);
+    serde_json::to_string(&ws).unwrap();
+}
+
+#[test]
+fn dps_and_unknown_files_are_ignored() {
+    let Some(w) = world() else { return };
+    let level = std::fs::read(w.join("Level.sav")).unwrap();
+    let junk = vec![1u8, 2, 3];
+    let ws = palworld_stats::save::parse_world(
+        &level,
+        vec![
+            ("X_dps".to_string(), junk.clone()),
+            ("LevelMeta".to_string(), junk),
+        ],
+    )
+    .unwrap();
+    assert!(ws.warnings.is_empty(), "{:?}", ws.warnings);
+    assert_eq!(ws.players.len(), 6);
+    assert!(ws.players.iter().all(|p| p.record.is_none()));
+}
