@@ -66,61 +66,95 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn missing(&mut self, name: &str) {
+    fn bad(&mut self, name: &str, message: &str) {
         self.warnings.push(ParseWarning {
             path: format!("{}.{name}", self.prefix),
-            message: "missing".to_string(),
+            message: message.to_string(),
         });
     }
 
-    fn opt<T>(&mut self, name: &str, v: Option<T>) -> Option<T> {
+    /// Absent -> default 0; present but not an in-range integer -> None + warning.
+    fn int(&mut self, name: &str) -> Option<i32> {
+        if self.props.get(name).is_none() {
+            return Some(0);
+        }
+        let v = self.props.int(name).and_then(|v| i32::try_from(v).ok());
         if v.is_none() {
-            self.missing(name);
+            self.bad(name, "unexpected type");
         }
         v
     }
 
-    fn int(&mut self, name: &str) -> Option<i32> {
-        let v = self.props.int(name).and_then(|v| i32::try_from(v).ok());
-        self.opt(name, v)
+    /// Absent -> `Some(false)`.
+    fn flag(&mut self, name: &str) -> Option<bool> {
+        if self.props.get(name).is_none() {
+            return Some(false);
+        }
+        let v = self.props.bool(name);
+        if v.is_none() {
+            self.bad(name, "unexpected type");
+        }
+        v
     }
 
+    /// Absent -> empty; present but not a map -> None + warning.
     fn map(&mut self, name: &str) -> Option<&[(Value, Value)]> {
-        let v = match self.props.get(name) {
+        match self.props.get(name) {
+            None => Some(&[]),
             Some(Value::Map(m)) => Some(m.as_slice()),
-            _ => None,
-        };
-        self.opt(name, v)
+            Some(_) => {
+                self.bad(name, "unexpected type");
+                None
+            }
+        }
     }
 
     /// Sum of the non-negative `Int` values of a map.
     fn sum(&mut self, name: &str) -> Option<u64> {
         let m = self.map(name)?;
-        Some(
-            m.iter()
-                .map(|(_, v)| match v {
-                    Value::Int(i) => u64::try_from(*i).unwrap_or(0),
-                    _ => 0,
-                })
-                .sum(),
-        )
+        let mut total = 0u64;
+        let mut ok = true;
+        for (_, v) in m {
+            match v {
+                Value::Int(i) => total += u64::try_from(*i).unwrap_or(0),
+                _ => ok = false,
+            }
+        }
+        if !ok {
+            self.bad(name, "unexpected map value type");
+            return None;
+        }
+        Some(total)
     }
 
     /// Count of `true` values of a map.
     fn count_true(&mut self, name: &str) -> Option<u32> {
         let m = self.map(name)?;
-        let n = m
-            .iter()
-            .filter(|(_, v)| matches!(v, Value::Bool(true)))
-            .count();
+        let mut n = 0usize;
+        let mut ok = true;
+        for (_, v) in m {
+            match v {
+                Value::Bool(b) => n += usize::from(*b),
+                _ => ok = false,
+            }
+        }
+        if !ok {
+            self.bad(name, "unexpected map value type");
+            return None;
+        }
         Some(u32::try_from(n).unwrap_or(u32::MAX))
     }
-}
 
-fn array_len(v: Option<&Value>) -> Option<u32> {
-    match v {
-        Some(Value::Array(a)) => Some(u32::try_from(a.len()).unwrap_or(u32::MAX)),
-        _ => None,
+    /// Absent -> 0; present but not an array -> None + warning.
+    fn array_len(&mut self, name: &str) -> Option<u32> {
+        match self.props.get(name) {
+            None => Some(0),
+            Some(Value::Array(a)) => Some(u32::try_from(a.len()).unwrap_or(u32::MAX)),
+            Some(_) => {
+                self.bad(name, "unexpected type");
+                None
+            }
+        }
     }
 }
 
@@ -128,12 +162,15 @@ fn array_len(v: Option<&Value>) -> Option<u32> {
 ///
 /// Synchronous; run inside `tokio::task::spawn_blocking` from async code.
 pub fn parse_player_save(raw: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
-    let data = decompress(raw)?;
+    parse_gvas(&decompress(raw)?)
+}
+
+fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
     let opts = ParseOptions {
         struct_keys: &[],
         skip: &|_| false,
     };
-    let (_, top, mut warnings) = gvas::parse(&data, &opts)?;
+    let (_, top, mut warnings) = gvas::parse(data, &opts)?;
     let save = top.struct_props("SaveData").ok_or_else(|| Error::Gvas {
         offset: 0,
         msg: "missing SaveData".to_string(),
@@ -152,23 +189,23 @@ pub fn parse_player_save(raw: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)
         warnings: &mut warnings,
     };
     let last_online = save.datetime("LastOnlineDateTime").and_then(ticks_to_utc);
-    let last_online = c.opt("LastOnlineDateTime", last_online);
     let platform_hint = save.string("PlayerPlatform").map(str::to_string);
-    let platform_hint = c.opt("PlayerPlatform", platform_hint);
     let technology_points = c.int("TechnologyPoint");
     let boss_technology_points = c.int("bossTechnologyPoint");
-    let unlocked_technologies = array_len(save.get("UnlockedRecipeTechnologyNames"));
-    let unlocked_technologies = c.opt("UnlockedRecipeTechnologyNames", unlocked_technologies);
-    let completed_quests = array_len(save.get("CompletedQuestArray_FullRelease"));
-    let completed_quests = c.opt("CompletedQuestArray_FullRelease", completed_quests);
+    let unlocked_technologies = c.array_len("UnlockedRecipeTechnologyNames");
+    let completed_quests = c.array_len("CompletedQuestArray_FullRelease");
 
     let empty = Props::default();
-    let rd = save.struct_props("RecordData");
-    if rd.is_none() {
-        c.missing("RecordData");
-    }
+    let rd = match save.get("RecordData") {
+        None => &empty,
+        Some(Value::Struct { props, .. }) => props,
+        Some(_) => {
+            c.bad("RecordData", "unexpected type");
+            &empty
+        }
+    };
     let mut r = Ctx {
-        props: rd.unwrap_or(&empty),
+        props: rd,
         prefix: ".SaveData.RecordData",
         warnings: &mut warnings,
     };
@@ -206,10 +243,7 @@ pub fn parse_player_save(raw: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)
         fishing_total: r.sum("FishingCountMap"),
         craft_item_total: r.sum("CraftItemCount"),
         fast_travel_unlocked: r.count_true("FastTravelPointUnlockFlag"),
-        game_cleared: {
-            let v = r.props.bool("bIsGameCleared");
-            r.opt("bIsGameCleared", v)
-        },
+        game_cleared: r.flag("bIsGameCleared"),
     };
 
     Ok((
@@ -242,5 +276,53 @@ mod tests {
         );
         assert_eq!(ticks_to_utc(UNIX_EPOCH_TICKS - 1), None);
         assert_eq!(ticks_to_utc(0), None);
+    }
+
+    fn save_doc(extra: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        use crate::save::gvas::build::*;
+        let mut inner = Vec::new();
+        let mut gh = fs("Guid");
+        gh.extend_from_slice(&[0u8; 16]);
+        tag(&mut inner, "PlayerUId", "StructProperty", &gh, &[0x11; 16]);
+        extra(&mut inner);
+        none(&mut inner);
+        let mut sh = fs("PalWorldPlayerSaveData");
+        sh.extend_from_slice(&[0u8; 16]);
+        let mut b = header_bytes();
+        tag(&mut b, "SaveData", "StructProperty", &sh, &inner);
+        none(&mut b);
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b
+    }
+
+    #[test]
+    fn absent_properties_default_without_warnings() {
+        let (p, w) = parse_gvas(&save_doc(|_| {})).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(p.records.species_captured, Some(0));
+        assert_eq!(p.records.pal_capture_total, Some(0));
+        assert_eq!(p.records.paldeck_unlocked, Some(0));
+        assert_eq!(p.records.game_cleared, Some(false));
+        assert_eq!(p.technology_points, Some(0));
+        assert_eq!(p.completed_quests, Some(0));
+        assert_eq!(p.last_online, None);
+        assert_eq!(p.platform_hint, None);
+    }
+
+    #[test]
+    fn wrong_type_gives_none_and_warning() {
+        use crate::save::gvas::build::*;
+        let doc = save_doc(|inner| {
+            let mut rd = Vec::new();
+            tag(&mut rd, "TribeCaptureCount", "StrProperty", &[], &fs("x"));
+            none(&mut rd);
+            let mut sh = fs("PalLocalRecordData");
+            sh.extend_from_slice(&[0u8; 16]);
+            tag(inner, "RecordData", "StructProperty", &sh, &rd);
+        });
+        let (p, w) = parse_gvas(&doc).unwrap();
+        assert_eq!(p.records.species_captured, None);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].path, ".SaveData.RecordData.TribeCaptureCount");
     }
 }

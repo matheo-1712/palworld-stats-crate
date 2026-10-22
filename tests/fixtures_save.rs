@@ -112,7 +112,10 @@ fn every_real_player_file_parses() {
         let (p, warnings) =
             palworld_stats::save::parse_player_save(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(p.uid.as_str(), path.file_stem().unwrap().to_string_lossy());
-        eprintln!("{name}: {warnings:?}");
+        assert!(warnings.is_empty(), "{name}: {warnings:?}");
+        if name.starts_with("5A713712") {
+            assert_eq!(p.records.species_captured, Some(0));
+        }
         n += 1;
     }
     assert!(n > 0);
