@@ -38,6 +38,8 @@ pub fn decode_character(bytes: &[u8]) -> Result<CharacterRaw> {
 pub struct GuildMember {
     pub uid: PlayerUid,
     pub name: String,
+    /// Server-relative real-time ticks, comparable to `GameTimeSaveData.RealDateTimeTicks`;
+    /// not an absolute UE `DateTime`.
     pub last_online_ticks: i64,
 }
 
@@ -68,7 +70,8 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
     let group_name = r.fstring()?;
     skip_guids(&mut r, 2)?;
 
-    // 2. Organisation: type byte, 4 unknown bytes, base ids, 4 unknown bytes.
+    // 2. Organisation: type byte u8 + 4 zero bytes (likely an empty array count),
+    //    base ids, then 4 more zero bytes.
     r.bytes(5)?;
     let base_count = skip_guids(&mut r, 1)?;
     r.bytes(4)?;
@@ -78,9 +81,14 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
     skip_guids(&mut r, 1)?;
     let guild_name = r.fstring()?;
 
-    // 4. Guild: last name modifier (guid) and 14 further bytes (fixed in current
-    //    saves), then admin and members.
-    r.bytes(30)?;
+    // 4. Guild: last guild-name modifier uid, i32, a u32-counted byte list (roles),
+    //    i32; then admin and members.
+    r.guid()?;
+    r.i32()?;
+    let n = r.u32()? as usize;
+    r.check_count(n)?;
+    r.bytes(n)?;
+    r.i32()?;
     let (admin, members) = {
         let admin = PlayerUid::from_guid(&r.guid()?);
         let count = r.i32()?;
@@ -93,7 +101,7 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
             let uid = PlayerUid::from_guid(&r.guid()?);
             let last_online_ticks = r.i64()?;
             let name = r.fstring()?;
-            // One extra per-member byte in current saves.
+            // Member role (01 admin, 03 member).
             r.u8()?;
             members.push(GuildMember {
                 uid,
@@ -104,7 +112,20 @@ pub fn decode_group(group_type: &str, bytes: &[u8]) -> Result<GroupRaw> {
         (admin, members)
     };
 
-    // 5. Per-guild trailing data (unmodelled) is ignored.
+    // 5. Trailer: map of u8 key -> (u32 len + bytes).
+    let entries = r.u32()? as usize;
+    r.check_count(entries)?;
+    for _ in 0..entries {
+        r.u8()?;
+        let len = r.u32()? as usize;
+        r.check_count(len)?;
+        r.bytes(len)?;
+    }
+    // A final zero u32 follows the map in current saves.
+    r.u32()?;
+    if !r.eof() {
+        return Err(r.err(format!("{} trailing bytes after group", r.remaining())));
+    }
     Ok(GroupRaw::Guild {
         id: GuildId::from_guid(&group_id),
         name: if guild_name.is_empty() {
@@ -224,7 +245,11 @@ mod tests {
         b.extend_from_slice(&1u32.to_le_bytes());
         b.extend_from_slice(&g(20));
         b.extend(fs(guild_name));
-        b.extend_from_slice(&[0; 30]);
+        b.extend_from_slice(&g(31));
+        b.extend_from_slice(&0i32.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&[2, 3]);
+        b.extend_from_slice(&0i32.to_le_bytes());
         b.extend_from_slice(&g(30));
         b.extend_from_slice(&2i32.to_le_bytes());
         for (i, n) in [(30u8, "Alice"), (31, "Bob")] {
@@ -233,6 +258,14 @@ mod tests {
             b.extend(fs(n));
             b.push(1);
         }
+        // Trailer: 2 entries.
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.push(2);
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&[0, 3]);
+        b.push(7);
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
         b
     }
 
@@ -272,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn guild_truncated_is_err_and_trailing_ignored() {
+    fn guild_truncated_is_err_and_trailing_is_err() {
         let mut data = guild_bytes("G");
         let ty = "EPalGroupType::Guild";
         assert!(decode_group(ty, &data).is_ok());
@@ -280,7 +313,7 @@ mod tests {
             assert!(decode_group(ty, &data[..len]).is_err(), "len {len}");
         }
         data.push(0);
-        assert!(decode_group(ty, &data).is_ok());
+        assert!(decode_group(ty, &data).is_err());
     }
 
     #[test]

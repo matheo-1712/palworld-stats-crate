@@ -137,7 +137,7 @@ fn parses_real_level() {
     assert_eq!(rere.level, Some(80));
     assert_eq!(rere.exp, Some(45_859_908));
     assert_eq!(rere.arena_rank_point, Some(585));
-    assert!(!l.guilds.is_empty());
+    assert!(!l.guilds.is_empty(), "{warnings:?}");
     assert!(l.guilds.iter().all(|g| !g.members.is_empty()));
     assert!(l.owned_pals.values().sum::<u32>() > 0);
     assert!(warnings.is_empty(), "{warnings:?}");
