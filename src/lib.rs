@@ -4,9 +4,13 @@
 
 pub mod error;
 pub mod ids;
+pub mod logs;
+pub mod presence;
 pub mod rest;
 pub mod save;
 
 pub use error::{Error, ParseWarning, Result};
 pub use ids::*;
+pub use logs::{LogEvent, LogEventKind, parse_log_line};
+pub use presence::{PresenceEvent, diff_presence};
 pub use rest::{OnlinePlayer, RestClient, ServerInfo, ServerMetrics};
