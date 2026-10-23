@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use super::level::{CharacterInfo, GuildInfo, LevelSave, OwnedPal, parse_level_save};
+use super::level::{CharacterInfo, GuildInfo, LevelSave, OwnedPal, PalLocation, parse_level_save};
 use super::player::{PlayerRecord, parse_player_save};
 use crate::error::{ParseWarning, Result};
 use crate::ids::{GuildId, PlayerUid};
@@ -56,6 +56,9 @@ pub struct PalSummary {
     pub perfect_talents: u32,
     /// Pals with four passive skills.
     pub four_passives: u32,
+    /// Pals in the party / in the Palbox (0 when the player file is missing).
+    pub in_party: u32,
+    pub in_box: u32,
 }
 
 impl PalSummary {
@@ -86,7 +89,22 @@ impl PalSummary {
                 p.talent_hp >= 100 && p.talent_attack >= 100 && p.talent_defense >= 100
             }),
             four_passives: count(&|p| p.passives.len() >= 4),
+            in_party: count(&|p| p.location == Some(PalLocation::Party)),
+            in_box: count(&|p| p.location == Some(PalLocation::Box)),
         }
+    }
+}
+
+impl PlayerStats {
+    /// The pals in the player's party, in party order.
+    pub fn party(&self) -> Vec<&OwnedPal> {
+        let mut party: Vec<&OwnedPal> = self
+            .pals
+            .iter()
+            .filter(|p| p.location == Some(PalLocation::Party))
+            .collect();
+        party.sort_by_key(|p| p.slot_index);
+        party
     }
 }
 
@@ -153,7 +171,16 @@ fn merge(level: LevelSave, records: Vec<PlayerRecord>, warnings: Vec<ParseWarnin
                         BTreeMap::new(),
                     ),
                 };
-            let player_pals = pals.remove(&uid).unwrap_or_default();
+            let mut player_pals = pals.remove(&uid).unwrap_or_default();
+            if let Some(r) = &record {
+                for pal in &mut player_pals {
+                    pal.location = Some(match pal.container_id.as_deref() {
+                        Some(c) if Some(c) == r.party_container_id.as_deref() => PalLocation::Party,
+                        Some(c) if Some(c) == r.box_container_id.as_deref() => PalLocation::Box,
+                        _ => PalLocation::Other,
+                    });
+                }
+            }
             PlayerStats {
                 owned_pals: owned_pals.get(&uid).copied().unwrap_or(0),
                 pal_summary: PalSummary::from_pals(&player_pals),
@@ -273,6 +300,8 @@ mod tests {
             completed_quests: None,
             quests_in_progress: None,
             skins: Default::default(),
+            party_container_id: None,
+            box_container_id: None,
             records: RecordStats::default(),
         }
     }
@@ -365,6 +394,9 @@ mod tests {
             skin: None,
             friendship: 0,
             obtained_at: None,
+            container_id: None,
+            slot_index: None,
+            location: None,
         }
     }
 

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::save::{GuildInfo, OwnedPal, PlayerStats, RecordStats};
+use crate::save::{GuildInfo, OwnedPal, PalLocation, PlayerStats, RecordStats};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -232,6 +232,10 @@ pub struct PalworldPal {
     pub skin: Option<String>,
     pub friendship: i32,
     pub obtained_at: Option<String>,
+    /// `party`, `box` or `other`; `null` when the owner's player file is missing.
+    pub location: Option<String>,
+    /// Slot in its container (party order for party pals).
+    pub slot_index: Option<i32>,
     pub updated_at: String,
 }
 
@@ -262,6 +266,15 @@ impl PalworldPal {
             skin: pal.skin.clone(),
             friendship: pal.friendship,
             obtained_at: pal.obtained_at.map(|t| t.to_rfc3339()),
+            location: pal.location.map(|l| {
+                match l {
+                    PalLocation::Party => "party",
+                    PalLocation::Box => "box",
+                    PalLocation::Other => "other",
+                }
+                .to_string()
+            }),
+            slot_index: pal.slot_index,
             updated_at: now.to_rfc3339(),
         }
     }
@@ -422,6 +435,8 @@ mod tests {
                 completed_quests: None,
                 quests_in_progress: None,
                 skins: Default::default(),
+                party_container_id: None,
+                box_container_id: None,
                 records,
             }),
         }

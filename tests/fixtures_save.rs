@@ -326,3 +326,30 @@ fn real_level_meta() {
     assert!(meta.world_name.is_some());
     assert!(meta.in_game_day.unwrap() > 0);
 }
+
+#[test]
+fn real_party_and_box() {
+    let Some(ws) = real_world() else { return };
+    for p in &ws.players {
+        let party = p.party();
+        assert!(party.len() <= 5, "{:?}: {} in party", p.name, party.len());
+        assert_eq!(party.len() as u32, p.pal_summary.in_party);
+        let slots: Vec<_> = party.iter().map(|x| x.slot_index).collect();
+        let mut sorted = slots.clone();
+        sorted.sort();
+        assert_eq!(slots, sorted);
+        assert!(p.pals.iter().all(|x| x.location.is_some()), "{:?}", p.name);
+        eprintln!(
+            "{:?}: party {:?} | box {} | other {}",
+            p.name,
+            party
+                .iter()
+                .map(|x| (x.species.as_str(), x.level))
+                .collect::<Vec<_>>(),
+            p.pal_summary.in_box,
+            p.pal_summary.total - p.pal_summary.in_party - p.pal_summary.in_box
+        );
+    }
+    let in_party: u32 = ws.players.iter().map(|p| p.pal_summary.in_party).sum();
+    assert!(in_party > 0);
+}

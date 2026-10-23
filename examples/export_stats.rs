@@ -50,6 +50,8 @@ struct PlayerEntry {
     last_online: Option<String>,
     stats: PalworldStats,
     pal_summary: PalSummary,
+    /// Party pals, in party order.
+    party: Vec<OwnedPal>,
     pals: Vec<OwnedPal>,
 }
 
@@ -121,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|t| t.to_rfc3339()),
                 stats: PalworldStats::from_player(&server, p.uid.as_str(), p, 0, now),
                 pal_summary: p.pal_summary.clone(),
+                party: p.party().into_iter().cloned().collect(),
                 pals: p.pals.clone(),
             }
         })

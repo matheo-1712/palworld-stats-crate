@@ -9,7 +9,7 @@ use super::container::decompress;
 use super::gvas::{self, ParseOptions, Props, Value};
 use super::player::ticks_to_utc;
 use super::rawdata::{GroupRaw, GuildMember, decode_character, decode_group};
-use crate::{GuildId, ParseWarning, PlayerUid, Result};
+use crate::{GuildId, ParseWarning, PlayerUid, Result, guid_to_string};
 
 const WORLD: &str = ".worldSaveData";
 const CHARACTER_MAP: &str = ".worldSaveData.CharacterSaveParameterMap";
@@ -69,6 +69,24 @@ pub struct OwnedPal {
     pub friendship: i32,
     /// When the pal was obtained (`OwnedTime`).
     pub obtained_at: Option<DateTime<Utc>>,
+    /// Container holding the pal (`SlotId.ContainerId.ID`), as a GUID string.
+    pub container_id: Option<String>,
+    /// Slot in that container (`SlotId.SlotIndex`): the party order for party pals.
+    pub slot_index: Option<i32>,
+    /// Party, box or elsewhere. Set by `parse_world` from the owner's player file;
+    /// `None` when that file is missing.
+    pub location: Option<PalLocation>,
+}
+
+/// Where an owned pal is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PalLocation {
+    /// In the player's party (`OtomoCharacterContainerId`).
+    Party,
+    /// In the player's Palbox (`PalStorageContainerId`).
+    Box,
+    /// Any other container, in practice a base camp.
+    Other,
 }
 
 /// A guild (group of type Guild).
@@ -120,6 +138,7 @@ fn status_points(props: &Props, name: &str) -> BTreeMap<String, i32> {
 }
 
 fn owned_pal(sp: &Props) -> OwnedPal {
+    let slot = sp.struct_props("SlotId");
     let species = sp.string("CharacterID").unwrap_or_default().to_string();
     let names = |name: &str| -> Vec<String> {
         match sp.get(name) {
@@ -161,6 +180,14 @@ fn owned_pal(sp: &Props) -> OwnedPal {
             .and_then(|v| i32::try_from(v).ok())
             .unwrap_or(0),
         obtained_at: sp.datetime("OwnedTime").and_then(ticks_to_utc),
+        container_id: slot
+            .and_then(|s| s.struct_props("ContainerId"))
+            .and_then(|c| c.guid("ID"))
+            .map(|g| guid_to_string(&g)),
+        slot_index: slot
+            .and_then(|s| s.int("SlotIndex"))
+            .and_then(|i| i32::try_from(i).ok()),
+        location: None,
     }
 }
 

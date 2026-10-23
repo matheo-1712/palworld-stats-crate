@@ -269,14 +269,18 @@ Tous ces champs sont des `Option` et valent `Some(0)` quand la propriété est a
 | `skin` | `Option<String>` | skin appliqué |
 | `friendship` | `i32` | points d'amitié |
 | `obtained_at` | `Option<DateTime<Utc>>` | date d'obtention |
+| `location` | `Option<PalLocation>` | `Party` (équipe), `Box` (Palbox) ou `Other` ; `None` si le fichier joueur manque |
+| `container_id` / `slot_index` | `Option<String>` / `Option<i32>` | conteneur et emplacement ; ordre de l'équipe pour les Pals de l'équipe |
 
-**`PalSummary`** — agrégats par joueur : `total`, `unique_species` (un alpha compte comme son espèce de base), `lucky`, `alpha`, `max_level`, `average_level` (`None` sans Pal), `max_rank` (Pals au rang 5), `awakened`, `perfect_talents` (100 dans les trois talents), `four_passives`.
+**Équipe du joueur.** `PlayerStats::party()` renvoie les Pals de l'équipe dans l'ordre (5 au maximum), tels qu'au moment de la sauvegarde. L'emplacement est déduit des conteneurs `OtomoCharacterContainerId` (équipe) et `PalStorageContainerId` (Palbox) du fichier joueur.
+
+**`PalSummary`** — agrégats par joueur : `total`, `unique_species` (un alpha compte comme son espèce de base), `lucky`, `alpha`, `max_level`, `average_level` (`None` sans Pal), `max_rank` (Pals au rang 5), `awakened`, `perfect_talents` (100 dans les trois talents), `four_passives`, `in_party`, `in_box`.
 
 **`parse_level_meta(&[u8]) -> Result<LevelMeta>`** lit `LevelMeta.sav` : `world_name` (nom du monde) et `in_game_day` (jour en jeu).
 
 **`GuildInfo`** : `id`, `name`, `admin: PlayerUid`, `members: Vec<GuildMember>`, `base_count`, `base_camp_level`. **`GuildMember`** : `uid`, `name`, `last_online_ticks` — ces ticks sont relatifs au serveur, ne les convertissez pas en date (utilisez `PlayerRecord::last_online`).
 
-Non disponibles dans les sauvegardes : morts, kills, distance parcourue, œufs éclos, temps de jeu, emplacement d'un Pal (équipe, base ou boîte).
+Non disponibles dans les sauvegardes : morts, kills, distance parcourue, œufs éclos, temps de jeu.
 
 ## Fonctions bas niveau
 
@@ -317,7 +321,7 @@ Avec `features = ["pocketbase"]`, le module `palworld_stats::pocketbase` fournit
 | `PalworldSession` | `palworld_sessions` | à remplir à la main ; `source: SessionSource::{Log, Poll}` sérialisé `"log"` / `"poll"` |
 | `PalworldStatsSnapshot` | `palworld_stats_snapshots` | `from_player(server, character, &PlayerStats, playtime_seconds, now)` |
 | `PalworldGuild` | `palworld_guilds` | `from_guild(server, &GuildInfo, admin_character, now)` ; le niveau sort sous le nom `base_level` |
-| `PalworldPal` | `palworld_pals` | `from_pal(server, character, &OwnedPal, now)` : une ligne par Pal possédé |
+| `PalworldPal` | `palworld_pals` | `from_pal(server, character, &OwnedPal, now)` : une ligne par Pal possédé, avec `location` (`party`, `box`, `other`) et `slot_index` |
 
 `PalworldStats` reprend tous les compteurs de `RecordStats`, plus `level`, `exp`, `owned_pals`, `arena_rank_point`, les points de technologie, les quêtes, `skins_owned` et le résumé des Pals (`pals_unique_species`, `pals_lucky`, `pals_alpha`, `pals_max_level`, `pals_average_level`, `pals_max_rank`, `pals_awakened`, `pals_perfect_talents`, `pals_four_passives`). Les détails par clé (`capture_by_species`, `fishing_by_species`, `craft_by_item`, `skins`, `status_points`, …) sont des objets JSON : déclarez-les comme champs `json` dans PocketBase. `PalworldStatsSnapshot` garde l'essentiel pour les courbes : `playtime_seconds`, `level`, `exp`, `pal_capture_count`, `paldeck_unique`, `boss_defeated` (boss de terrain + boss de tour).
 
@@ -377,6 +381,7 @@ Forme de la sortie :
       "guild_role": "Member",
       "last_online": "2026-08-06T22:15:34+00:00",
       "stats": { "level": 80, "exp": 45859908, "owned_pals": 869, "species_captured": 257, "fishing_by_species": { "...": 0 }, "...": "..." },
+      "party": [ { "species": "JetDragon", "level": 80, "location": "Party", "slot_index": 0, "...": "..." } ],
       "pal_summary": { "total": 869, "unique_species": 82, "lucky": 1, "alpha": 221, "max_level": 80, "...": "..." },
       "pals": [ { "species": "WoolFox", "level": 37, "rank": 5, "is_lucky": false, "passives": ["..."], "...": "..." } ]
     }

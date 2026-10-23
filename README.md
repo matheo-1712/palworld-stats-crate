@@ -122,7 +122,8 @@ Les détails par clé (`capture_by_species`, `fishing_by_species`, `craft_by_ite
   points de technologie (normaux et boss), technologies débloquées, quêtes terminées.
 - **Pals** : captures (total et par espèce), espèces capturées, Paldeck, éveils, rangs,
   mutations, Pals abattus ; **chaque Pal possédé** (espèce, alpha, lucky, niveau, rang, âmes,
-  talents, passifs, éveil, skin, amitié, date d'obtention) et son résumé (`PalSummary`).
+  talents, passifs, éveil, skin, amitié, date d'obtention, **équipe / Palbox**) et son résumé
+  (`PalSummary`) ; `PlayerStats::party()` donne l'équipe dans l'ordre.
 - **Combat** : boss vaincus, boss de tour, raids, prédateurs, camps conquis, arène solo,
   plateformes pétrolières.
 - **Exploration / artisanat** : donjons (normaux et fixes), trésors, reliques, pêche, objets

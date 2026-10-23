@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::container::decompress;
 use super::gvas::{self, ParseOptions, Props, Value};
-use crate::{Error, ParseWarning, PlayerUid, Result};
+use crate::{Error, ParseWarning, PlayerUid, Result, guid_to_string};
 
 /// Ticks (100 ns since 0001-01-01) at the Unix epoch.
 const UNIX_EPOCH_TICKS: u64 = 621_355_968_000_000_000;
@@ -101,6 +101,10 @@ pub struct PlayerRecord {
     pub quests_in_progress: Option<u32>,
     /// Skins owned, by skin name (`SkinInventoryInfo.InGameData`).
     pub skins: BTreeMap<String, i32>,
+    /// Party container (`OtomoCharacterContainerId.ID`), as a GUID string.
+    pub party_container_id: Option<String>,
+    /// Palbox container (`PalStorageContainerId.ID`), as a GUID string.
+    pub box_container_id: Option<String>,
     pub records: RecordStats,
 }
 
@@ -286,6 +290,13 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
     let completed_quests = c.array_len("CompletedQuestArray_FullRelease");
     let quests_in_progress = c.array_len("OrderedQuestArray_FullRelease");
     let skins = skins(save, &mut c);
+    let container = |name: &str| {
+        save.struct_props(name)
+            .and_then(|c| c.guid("ID"))
+            .map(|g| guid_to_string(&g))
+    };
+    let party_container_id = container("OtomoCharacterContainerId");
+    let box_container_id = container("PalStorageContainerId");
 
     let empty = Props::default();
     let rd = match save.get("RecordData") {
@@ -362,6 +373,8 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
             completed_quests,
             quests_in_progress,
             skins,
+            party_container_id,
+            box_container_id,
             records,
         },
         warnings,
