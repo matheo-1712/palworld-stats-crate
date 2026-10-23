@@ -282,6 +282,29 @@ Tous ces champs sont des `Option` et valent `Some(0)` quand la propriété est a
 
 Non disponibles dans les sauvegardes : morts, kills, distance parcourue, œufs éclos, temps de jeu.
 
+## Noms des Pals et des passifs
+
+Les sauvegardes ne contiennent que des identifiants internes (`OwnedPal::species`, `OwnedPal::passives`, clés de `pal_capture_by_species`). Le module `names` donne les noms affichés en jeu, en anglais ou en français. La recherche ignore la casse ; un identifiant inconnu renvoie `None`, à vous d'afficher l'identifiant brut à la place.
+
+```rust
+use palworld_stats::{Lang, pal_name, pal_species_name, passive_name};
+
+pal_name("SheepBall", Lang::Fr);              // Some("Lamball")
+pal_name("BOSS_SheepBall", Lang::Fr);         // Some("Énorme et Moelleux Lamball")
+pal_species_name("BOSS_SheepBall", Lang::Fr); // Some("Lamball"), sans le titre de variante
+passive_name("Rare", Lang::Fr);               // Some("Chanceux")
+```
+
+- En français, la plupart des Pals gardent leur nom anglais ; ce sont surtout les titres (alphas, boss, raids), les humains et les passifs qui sont traduits.
+- Les humains capturés (`Hunter_Rifle`, `SalesPerson`…) sont dans la même table que les Pals.
+- `pal_capture_by_species` compte tous les humains capturés sous une seule clé, `Human`, qui n'a pas de nom.
+
+La table `src/names/data.rs` est générée par `scripts/gen_names.py` à partir des fichiers `pal_data.json`, `human_data.json` et `pal_passives.json` de [Palworld-Pal-Editor](https://github.com/KrisCris/Palworld-Pal-Editor) (`src/palworld_pal_editor/assets/data/`), qui contiennent les textes officiels extraits du jeu. Après une mise à jour du jeu qui ajoute des Pals, téléchargez les nouveaux fichiers et relancez :
+
+```text
+python scripts/gen_names.py pal_data.json human_data.json pal_passives.json
+```
+
 ## Fonctions bas niveau
 
 `parse_world` suffit dans presque tous les cas. Ces fonctions du module `palworld_stats::save` servent à traiter un seul fichier ou à lire une propriété que la crate n'expose pas encore.

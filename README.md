@@ -15,6 +15,8 @@ Elle fournit :
 - `parse_log_line` : reconnaît les lignes de connexion / déconnexion des logs du serveur.
 - `parse_world` : lit `Level.sav` + `Players/*.sav` (formats `PlM`/Oodle via `oozextract`, et
   `PlZ`) et renvoie un `WorldStats` (joueurs, guildes, avertissements).
+- `pal_name` / `pal_species_name` / `passive_name` : noms affichés en jeu (anglais, français) des
+  identifiants internes des sauvegardes (`SheepBall` → « Lamball »).
 - Feature `pocketbase` : structs `serde` des collections proposées.
 
 ## Installation
