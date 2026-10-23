@@ -5,6 +5,8 @@ Palworld dédié. Elle est consommée par le service « Otternel », qui stocke 
 PocketBase. La crate est **sans état** : pas d'I/O disque, pas de Docker, pas de base de
 données. Elle prend des octets ou des chaînes et renvoie des structs.
 
+Guide complet d'utilisation : [docs/GUIDE.md](docs/GUIDE.md).
+
 Elle fournit :
 
 - `RestClient` : client async de l'API REST officielle (`info`, `players`, `metrics`). L'IP
@@ -19,7 +21,7 @@ Elle fournit :
 
 ```toml
 [dependencies]
-palworld-stats = { git = "https://github.com/<organisation>/palworld-stats", features = ["pocketbase"] }
+palworld-stats = { git = "https://github.com/matheo-1712/palworld-stats-crate", features = ["pocketbase"] }
 ```
 
 ## Boucle d'intégration côté Otternel
