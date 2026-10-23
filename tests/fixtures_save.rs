@@ -234,3 +234,95 @@ fn dps_and_unknown_files_are_ignored() {
     assert_eq!(ws.warnings[0].path, "Players/garbage.sav");
     assert_eq!(ws.warnings[0].message, "not a player save file name");
 }
+
+fn real_world() -> Option<palworld_stats::WorldStats> {
+    let w = world()?;
+    let level = std::fs::read(w.join("Level.sav")).unwrap();
+    let players: Vec<(String, Vec<u8>)> = std::fs::read_dir(w.join("Players"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .map(|p| {
+            (
+                p.file_name().unwrap().to_string_lossy().into_owned(),
+                std::fs::read(&p).unwrap(),
+            )
+        })
+        .collect();
+    Some(palworld_stats::parse_world(&level, players).unwrap())
+}
+
+#[test]
+fn real_extended_record_stats() {
+    let Some(ws) = real_world() else { return };
+    assert!(ws.warnings.is_empty(), "{:?}", ws.warnings);
+    let p = ws
+        .players
+        .iter()
+        .find(|p| p.uid.as_str() == "3C36EC75000000000000000000000000")
+        .unwrap();
+    let rec = p.record.as_ref().unwrap();
+    let r = &rec.records;
+    assert!(r.areas_discovered.unwrap() > 0 && r.areas_discovered.unwrap() <= 99);
+    assert!(r.notes_found.unwrap() > 0);
+    assert!(r.relics_picked_up.unwrap() > 0);
+    assert!(r.npc_talks_total.unwrap() > 0);
+    assert_eq!(r.emotes_learned, Some(1));
+    assert_eq!(r.fishing_by_species.len(), 35);
+    assert_eq!(r.craft_by_item.len(), 256);
+    assert_eq!(r.capture_bonus_by_species.len(), 249);
+    assert_eq!(r.relics_by_type.len(), 6);
+    assert!(
+        r.relics_by_type.keys().all(|k| !k.contains("::")),
+        "{:?}",
+        r.relics_by_type
+    );
+    assert_eq!(r.specific_boss_defeats.get("SecurityDrone"), Some(&14));
+    assert_eq!(r.specific_boss_defeat_total, Some(14));
+    assert!(
+        r.rankup_by_rank
+            .keys()
+            .all(|k| ["2", "3", "4", "5"].contains(&k.as_str()))
+    );
+    let fish: i64 = r.fishing_by_species.values().map(|v| i64::from(*v)).sum();
+    assert_eq!(Some(fish as u64), r.fishing_total);
+    assert_eq!(rec.skins.len(), 22);
+    assert_eq!(rec.quests_in_progress, Some(4));
+    assert_eq!(
+        rec.unlocked_technology_names.len() as u32,
+        rec.unlocked_technologies.unwrap()
+    );
+    assert!(!p.status_points.is_empty());
+}
+
+#[test]
+fn real_owned_pals() {
+    let Some(ws) = real_world() else { return };
+    let mut lucky = 0;
+    for p in &ws.players {
+        assert_eq!(p.pals.len() as u32, p.owned_pals, "{:?}", p.name);
+        assert_eq!(p.pal_summary.total, p.owned_pals);
+        for pal in &p.pals {
+            assert!(!pal.species.is_empty());
+            assert!((1..=5).contains(&pal.rank), "{pal:?}");
+            assert!(pal.level >= 1);
+            assert!(pal.talent_hp <= 100 && pal.talent_attack <= 100 && pal.talent_defense <= 100);
+        }
+        if !p.pals.is_empty() {
+            assert!(p.pal_summary.unique_species > 0);
+            assert!(p.pal_summary.max_level >= 1);
+        }
+        lucky += p.pal_summary.lucky;
+    }
+    assert!(lucky > 0 && lucky <= 45, "{lucky}");
+    let total: u32 = ws.players.iter().map(|p| p.pal_summary.total).sum();
+    assert_eq!(total, 2684);
+}
+
+#[test]
+fn real_level_meta() {
+    let Some(w) = world() else { return };
+    let meta =
+        palworld_stats::parse_level_meta(&std::fs::read(w.join("LevelMeta.sav")).unwrap()).unwrap();
+    assert!(meta.world_name.is_some());
+    assert!(meta.in_game_day.unwrap() > 0);
+}

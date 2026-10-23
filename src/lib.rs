@@ -15,8 +15,8 @@ pub use logs::{LogEvent, LogEventKind, parse_log_line};
 pub use presence::{PresenceEvent, diff_presence};
 pub use rest::{OnlinePlayer, RestClient, ServerInfo, ServerMetrics};
 pub use save::{
-    GuildInfo, GuildMember, GuildRole, PlayerRecord, PlayerStats, RecordStats, WorldStats,
-    parse_world,
+    GuildInfo, GuildMember, GuildRole, LevelMeta, OwnedPal, PalSummary, PlayerRecord, PlayerStats,
+    RecordStats, WorldStats, parse_level_meta, parse_world,
 };
 
 #[cfg(feature = "pocketbase")]

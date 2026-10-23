@@ -3,7 +3,9 @@
 //! Conventions: ids and relations are `String`, dates are RFC 3339 strings. Values that can
 //! be unknown are `Option` and serialized as `null`.
 
-use crate::save::{GuildInfo, PlayerStats};
+use std::collections::BTreeMap;
+
+use crate::save::{GuildInfo, OwnedPal, PlayerStats, RecordStats};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +27,7 @@ pub struct PalworldCharacter {
 }
 
 /// Collection `palworld_stats` (current values, 1:1 with a character).
-/// `pal_capture_by_species` is deliberately not stored.
+/// Per-key details (`*_by_*`, `skins`, `status_points`, ...) are PocketBase `json` fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PalworldStats {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +67,43 @@ pub struct PalworldStats {
     pub craft_item_total: Option<u64>,
     pub fast_travel_unlocked: Option<u32>,
     pub game_cleared: Option<bool>,
+    pub areas_discovered: Option<u32>,
+    pub area_barriers_unlocked: Option<u32>,
+    pub world_maps_unlocked: Option<u32>,
+    pub notes_found: Option<u32>,
+    pub relics_picked_up: Option<u32>,
+    pub items_picked_up: Option<u32>,
+    pub npc_talks_total: Option<u64>,
+    pub npc_achievements: Option<u32>,
+    pub emotes_learned: Option<u32>,
+    pub specific_boss_defeat_total: Option<u64>,
+    pub quests_in_progress: Option<u32>,
+    pub skins_owned: Option<u32>,
+    // Pal collection summary (from Level.sav).
+    pub pals_unique_species: u32,
+    pub pals_lucky: u32,
+    pub pals_alpha: u32,
+    pub pals_max_level: u8,
+    pub pals_average_level: Option<f64>,
+    pub pals_max_rank: u32,
+    pub pals_awakened: u32,
+    pub pals_perfect_talents: u32,
+    pub pals_four_passives: u32,
+    // Details (json fields). Empty maps when the player file is missing.
+    pub capture_by_species: BTreeMap<String, i32>,
+    pub capture_bonus_by_species: BTreeMap<String, i32>,
+    pub butcher_by_species: BTreeMap<String, i32>,
+    pub rankup_by_rank: BTreeMap<String, i32>,
+    pub fishing_by_species: BTreeMap<String, i32>,
+    pub craft_by_item: BTreeMap<String, i32>,
+    pub tower_boss_defeats: BTreeMap<String, i32>,
+    pub raid_boss_defeats: BTreeMap<String, i32>,
+    pub arena_solo_clears: BTreeMap<String, i32>,
+    pub relics_by_type: BTreeMap<String, i32>,
+    pub specific_boss_defeats: BTreeMap<String, i32>,
+    pub skins: BTreeMap<String, i32>,
+    pub status_points: BTreeMap<String, i32>,
+    pub ex_status_points: BTreeMap<String, i32>,
 }
 
 impl PalworldStats {
@@ -116,6 +155,114 @@ impl PalworldStats {
             craft_item_total: r.and_then(|r| r.craft_item_total),
             fast_travel_unlocked: r.and_then(|r| r.fast_travel_unlocked),
             game_cleared: r.and_then(|r| r.game_cleared),
+            areas_discovered: r.and_then(|r| r.areas_discovered),
+            area_barriers_unlocked: r.and_then(|r| r.area_barriers_unlocked),
+            world_maps_unlocked: r.and_then(|r| r.world_maps_unlocked),
+            notes_found: r.and_then(|r| r.notes_found),
+            relics_picked_up: r.and_then(|r| r.relics_picked_up),
+            items_picked_up: r.and_then(|r| r.items_picked_up),
+            npc_talks_total: r.and_then(|r| r.npc_talks_total),
+            npc_achievements: r.and_then(|r| r.npc_achievements),
+            emotes_learned: r.and_then(|r| r.emotes_learned),
+            specific_boss_defeat_total: r.and_then(|r| r.specific_boss_defeat_total),
+            quests_in_progress: rec.and_then(|r| r.quests_in_progress),
+            skins_owned: rec.map(|r| u32::try_from(r.skins.len()).unwrap_or(u32::MAX)),
+            pals_unique_species: p.pal_summary.unique_species,
+            pals_lucky: p.pal_summary.lucky,
+            pals_alpha: p.pal_summary.alpha,
+            pals_max_level: p.pal_summary.max_level,
+            pals_average_level: p.pal_summary.average_level,
+            pals_max_rank: p.pal_summary.max_rank,
+            pals_awakened: p.pal_summary.awakened,
+            pals_perfect_talents: p.pal_summary.perfect_talents,
+            pals_four_passives: p.pal_summary.four_passives,
+            capture_by_species: detail(r, |r| &r.pal_capture_by_species),
+            capture_bonus_by_species: detail(r, |r| &r.capture_bonus_by_species),
+            butcher_by_species: detail(r, |r| &r.butcher_by_species),
+            rankup_by_rank: detail(r, |r| &r.rankup_by_rank),
+            fishing_by_species: detail(r, |r| &r.fishing_by_species),
+            craft_by_item: detail(r, |r| &r.craft_by_item),
+            tower_boss_defeats: detail(r, |r| &r.tower_boss_defeats),
+            raid_boss_defeats: detail(r, |r| &r.raid_boss_defeats),
+            arena_solo_clears: detail(r, |r| &r.arena_solo_clears),
+            relics_by_type: detail(r, |r| &r.relics_by_type),
+            specific_boss_defeats: detail(r, |r| &r.specific_boss_defeats),
+            skins: rec.map(|r| r.skins.clone()).unwrap_or_default(),
+            status_points: p.status_points.clone(),
+            ex_status_points: p.ex_status_points.clone(),
+        }
+    }
+}
+
+/// Clones a detail map out of an optional `RecordStats`.
+fn detail(
+    r: Option<&RecordStats>,
+    f: impl Fn(&RecordStats) -> &BTreeMap<String, i32>,
+) -> BTreeMap<String, i32> {
+    r.map(|r| f(r).clone()).unwrap_or_default()
+}
+
+/// Collection `palworld_pals`: one row per owned pal (like `captured_pokemons`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PalworldPal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub server: String,
+    /// Relation to `palworld_characters` (the owner).
+    pub character: String,
+    pub species: String,
+    pub is_alpha: bool,
+    pub is_lucky: bool,
+    pub level: u8,
+    pub exp: i64,
+    pub nickname: Option<String>,
+    pub gender: Option<String>,
+    pub rank: u8,
+    pub soul_hp: u8,
+    pub soul_attack: u8,
+    pub soul_defense: u8,
+    pub soul_craft_speed: u8,
+    pub talent_hp: u8,
+    pub talent_attack: u8,
+    pub talent_defense: u8,
+    /// json field.
+    pub passives: Vec<String>,
+    pub skills_learned: u32,
+    pub awakened: bool,
+    pub skin: Option<String>,
+    pub friendship: i32,
+    pub obtained_at: Option<String>,
+    pub updated_at: String,
+}
+
+impl PalworldPal {
+    pub fn from_pal(server: &str, character: &str, pal: &OwnedPal, now: DateTime<Utc>) -> Self {
+        Self {
+            id: None,
+            server: server.to_string(),
+            character: character.to_string(),
+            species: pal.species.clone(),
+            is_alpha: pal.is_alpha,
+            is_lucky: pal.is_lucky,
+            level: pal.level,
+            exp: pal.exp,
+            nickname: pal.nickname.clone(),
+            gender: pal.gender.clone(),
+            rank: pal.rank,
+            soul_hp: pal.soul_hp,
+            soul_attack: pal.soul_attack,
+            soul_defense: pal.soul_defense,
+            soul_craft_speed: pal.soul_craft_speed,
+            talent_hp: pal.talent_hp,
+            talent_attack: pal.talent_attack,
+            talent_defense: pal.talent_defense,
+            passives: pal.passives.clone(),
+            skills_learned: pal.skills_learned,
+            awakened: pal.awakened,
+            skin: pal.skin.clone(),
+            friendship: pal.friendship,
+            obtained_at: pal.obtained_at.map(|t| t.to_rfc3339()),
+            updated_at: now.to_rfc3339(),
         }
     }
 }
@@ -260,6 +407,10 @@ mod tests {
             guild_id: None,
             guild_role: None,
             owned_pals: 4,
+            pal_summary: Default::default(),
+            pals: Vec::new(),
+            status_points: Default::default(),
+            ex_status_points: Default::default(),
             record: Some(PlayerRecord {
                 uid: PlayerUid::parse("A1").unwrap(),
                 last_online: None,
@@ -267,7 +418,10 @@ mod tests {
                 technology_points: Some(5),
                 boss_technology_points: None,
                 unlocked_technologies: None,
+                unlocked_technology_names: Vec::new(),
                 completed_quests: None,
+                quests_in_progress: None,
+                skins: Default::default(),
                 records,
             }),
         }
@@ -279,6 +433,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"species_captured\":257"), "{json}");
         assert!(!json.contains("pal_capture_by_species"));
+        assert!(json.contains("\"capture_by_species\":{}"), "{json}");
         assert!(!json.contains("\"id\""));
     }
 

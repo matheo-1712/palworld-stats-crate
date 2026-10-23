@@ -180,6 +180,9 @@ where I: IntoIterator<Item = (String, Vec<u8>)>
 | `arena_rank_point` | `Option<i32>` | points de classement d'arène |
 | `guild_id` / `guild_role` | `Option<GuildId>` / `Option<GuildRole>` | guilde et rôle (`Admin` ou `Member`) |
 | `owned_pals` | `u32` | Pals dont le joueur est propriétaire dans Level.sav |
+| `pals` | `Vec<OwnedPal>` | détail de chaque Pal possédé (voir plus bas) |
+| `pal_summary` | `PalSummary` | agrégats sur ces Pals, prêts pour un classement |
+| `status_points` / `ex_status_points` | `BTreeMap<String, i32>` | points de statut attribués par stat (noms internes japonais du jeu, ex. `最大HP`) |
 | `record` | `Option<PlayerRecord>` | données du fichier joueur, `None` s'il manque |
 
 **`PlayerRecord`** — contenu de `Players/<UID>.sav`
@@ -190,7 +193,10 @@ where I: IntoIterator<Item = (String, Vec<u8>)>
 | `platform_hint` | `Option<String>` | plateforme déclarée (sans l'identifiant) |
 | `technology_points` / `boss_technology_points` | `Option<i32>` | points de technologie disponibles |
 | `unlocked_technologies` | `Option<u32>` | recettes débloquées |
+| `unlocked_technology_names` | `Vec<String>` | noms des recettes débloquées |
 | `completed_quests` | `Option<u32>` | quêtes terminées |
+| `quests_in_progress` | `Option<u32>` | quêtes en cours |
+| `skins` | `BTreeMap<String, i32>` | skins possédés (nom → quantité) |
 | `records` | `RecordStats` | compteurs ci-dessous |
 
 **`RecordStats`** — compteurs de progression (propriété Palworld entre parenthèses)
@@ -218,12 +224,59 @@ where I: IntoIterator<Item = (String, Vec<u8>)>
 | `craft_item_total` | objets produits (inclut sans doute la production des bases) |
 | `fast_travel_unlocked` | points de voyage rapide débloqués |
 | `game_cleared` | jeu terminé (`bIsGameCleared`) |
+| `areas_discovered` | zones de la carte découvertes (`FindAreaFlagMap`) |
+| `area_barriers_unlocked` | barrières de zone déverrouillées |
+| `world_maps_unlocked` | morceaux de carte du monde débloqués |
+| `notes_found` | notes de journal trouvées |
+| `relics_picked_up` | reliques ramassées sur la carte |
+| `items_picked_up` | objets uniques ramassés sur la carte |
+| `npc_talks_total` | conversations avec des PNJ |
+| `npc_achievements` | récompenses de PNJ obtenues |
+| `emotes_learned` | emotes apprises auprès de PNJ |
+| `specific_boss_defeat_total` | boss spéciaux vaincus (`SpecificBossDefeatFlag`) |
 
-Tous ces champs sont des `Option` (sauf la map par espèce) et valent `Some(0)` quand la propriété est absente.
+Tous ces champs sont des `Option` et valent `Some(0)` quand la propriété est absente.
+
+**Détails par clé** (`BTreeMap<String, i32>`, vides quand la propriété est absente) :
+
+| Champ | Clé | Contenu |
+| --- | --- | --- |
+| `pal_capture_by_species` | espèce | captures |
+| `capture_bonus_by_species` | espèce | captures ayant donné un bonus d'XP |
+| `butcher_by_species` | espèce | Pals abattus |
+| `rankup_by_rank` | rang atteint (`"2"` à `"5"`) | condensations |
+| `fishing_by_species` | poisson | prises |
+| `craft_by_item` | objet | quantités produites |
+| `tower_boss_defeats` / `raid_boss_defeats` | boss | victoires |
+| `arena_solo_clears` | rang d'arène | victoires |
+| `relics_by_type` | type de relique (`CapturePower`, …) | reliques possédées |
+| `specific_boss_defeats` | boss spécial | victoires |
+
+**`OwnedPal`** — un Pal possédé (lu dans `Level.sav`)
+
+| Champ | Type | Contenu |
+| --- | --- | --- |
+| `species` | `String` | identifiant d'espèce (`CharacterID`), ex. `WoolFox` ; un alpha garde son préfixe `BOSS_` |
+| `is_alpha` / `is_lucky` | `bool` | alpha capturé / Pal lucky (shiny, `IsRarePal`) |
+| `level` / `exp` | `u8` / `i64` | niveau (1 si absent) et expérience |
+| `nickname` / `gender` | `Option<String>` | surnom, `Male` ou `Female` |
+| `rank` | `u8` | rang de condensation, 1 (base) à 5 (4 étoiles) |
+| `soul_hp` / `soul_attack` / `soul_defense` / `soul_craft_speed` | `u8` | améliorations par les âmes |
+| `talent_hp` / `talent_attack` / `talent_defense` | `u8` | talents (IV), 0 à 100 |
+| `passives` | `Vec<String>` | compétences passives |
+| `skills_learned` | `u32` | compétences actives apprises |
+| `awakened` | `bool` | Pal éveillé |
+| `skin` | `Option<String>` | skin appliqué |
+| `friendship` | `i32` | points d'amitié |
+| `obtained_at` | `Option<DateTime<Utc>>` | date d'obtention |
+
+**`PalSummary`** — agrégats par joueur : `total`, `unique_species` (un alpha compte comme son espèce de base), `lucky`, `alpha`, `max_level`, `average_level` (`None` sans Pal), `max_rank` (Pals au rang 5), `awakened`, `perfect_talents` (100 dans les trois talents), `four_passives`.
+
+**`parse_level_meta(&[u8]) -> Result<LevelMeta>`** lit `LevelMeta.sav` : `world_name` (nom du monde) et `in_game_day` (jour en jeu).
 
 **`GuildInfo`** : `id`, `name`, `admin: PlayerUid`, `members: Vec<GuildMember>`, `base_count`, `base_camp_level`. **`GuildMember`** : `uid`, `name`, `last_online_ticks` — ces ticks sont relatifs au serveur, ne les convertissez pas en date (utilisez `PlayerRecord::last_online`).
 
-Non disponibles dans les sauvegardes : morts, kills, distance parcourue, œufs éclos, temps de jeu.
+Non disponibles dans les sauvegardes : morts, kills, distance parcourue, œufs éclos, temps de jeu, emplacement d'un Pal (équipe, base ou boîte).
 
 ## Fonctions bas niveau
 
@@ -264,8 +317,9 @@ Avec `features = ["pocketbase"]`, le module `palworld_stats::pocketbase` fournit
 | `PalworldSession` | `palworld_sessions` | à remplir à la main ; `source: SessionSource::{Log, Poll}` sérialisé `"log"` / `"poll"` |
 | `PalworldStatsSnapshot` | `palworld_stats_snapshots` | `from_player(server, character, &PlayerStats, playtime_seconds, now)` |
 | `PalworldGuild` | `palworld_guilds` | `from_guild(server, &GuildInfo, admin_character, now)` ; le niveau sort sous le nom `base_level` |
+| `PalworldPal` | `palworld_pals` | `from_pal(server, character, &OwnedPal, now)` : une ligne par Pal possédé |
 
-`PalworldStats` reprend tous les champs de `RecordStats` sauf `pal_capture_by_species`, plus `level`, `exp`, `owned_pals`, `arena_rank_point`, les points de technologie et les quêtes. `PalworldStatsSnapshot` garde l'essentiel pour les courbes : `playtime_seconds`, `level`, `exp`, `pal_capture_count`, `paldeck_unique`, `boss_defeated` (boss de terrain + boss de tour).
+`PalworldStats` reprend tous les compteurs de `RecordStats`, plus `level`, `exp`, `owned_pals`, `arena_rank_point`, les points de technologie, les quêtes, `skins_owned` et le résumé des Pals (`pals_unique_species`, `pals_lucky`, `pals_alpha`, `pals_max_level`, `pals_average_level`, `pals_max_rank`, `pals_awakened`, `pals_perfect_talents`, `pals_four_passives`). Les détails par clé (`capture_by_species`, `fishing_by_species`, `craft_by_item`, `skins`, `status_points`, …) sont des objets JSON : déclarez-les comme champs `json` dans PocketBase. `PalworldStatsSnapshot` garde l'essentiel pour les courbes : `playtime_seconds`, `level`, `exp`, `pal_capture_count`, `paldeck_unique`, `boss_defeated` (boss de terrain + boss de tour).
 
 ```rust
 use chrono::Utc;
@@ -312,6 +366,7 @@ Forme de la sortie :
 {
   "server": "palworld_vanilla",
   "generated_at": "2026-10-23T08:00:00+00:00",
+  "world": { "world_name": "Autosave_W", "in_game_day": 5081 },
   "players": [
     {
       "player_uid": "3C36EC75000000000000000000000000",
@@ -321,7 +376,9 @@ Forme de la sortie :
       "guild": "Les Loutres Mouillées",
       "guild_role": "Member",
       "last_online": "2026-08-06T22:15:34+00:00",
-      "stats": { "level": 80, "exp": 45859908, "owned_pals": 869, "species_captured": 257, "...": "..." }
+      "stats": { "level": 80, "exp": 45859908, "owned_pals": 869, "species_captured": 257, "fishing_by_species": { "...": 0 }, "...": "..." },
+      "pal_summary": { "total": 869, "unique_species": 82, "lucky": 1, "alpha": 221, "max_level": 80, "...": "..." },
+      "pals": [ { "species": "WoolFox", "level": 37, "rank": 5, "is_lucky": false, "passives": ["..."], "...": "..." } ]
     }
   ],
   "guilds": [ { "name": "Les Loutres Mouillées", "member_count": 3, "base_count": 3, "base_level": 35, "...": "..." } ],
@@ -329,7 +386,7 @@ Forme de la sortie :
 }
 ```
 
-Les joueurs sont triés par niveau puis par XP. `steam_id` vaut `null` sans `--ids`, pour un joueur absent du fichier ou pour un joueur Xbox (qui garde son `platform_id`). Dans `stats`, `character` contient l'UID et `playtime_seconds` vaut 0, car ces deux valeurs n'existent qu'une fois les données en base.
+Les joueurs sont triés par niveau puis par XP. `world` vient de `LevelMeta.sav` s'il est présent dans le dossier. Avec la liste complète des Pals, le fichier pèse environ 2 Mo pour 6 joueurs. `steam_id` vaut `null` sans `--ids`, pour un joueur absent du fichier ou pour un joueur Xbox (qui garde son `platform_id`). Dans `stats`, `character` contient l'UID et `playtime_seconds` vaut 0, car ces deux valeurs n'existent qu'une fois les données en base.
 
 ## Erreurs et avertissements
 
@@ -352,7 +409,7 @@ Toutes les fonctions renvoient `palworld_stats::Result<T>`. L'enum `Error` est `
 
 ## Tests, fixtures et limites
 
-**Lancer les tests.** `cargo test --release --all-features` exécute 76 tests ; le mode release est conseillé car la décompression Oodle est lente en debug.
+**Lancer les tests.** `cargo test --release --all-features` exécute 81 tests ; le mode release est conseillé car la décompression Oodle est lente en debug.
 
 - Les tests unitaires (format GVAS, décodeurs, REST simulé avec wiremock, logs, PocketBase) n'ont besoin de rien.
 - Les tests sur vraies sauvegardes lisent `fixtures/86150974C2A144B79C51A0354CCBE1FD/`. Ce dossier est ignoré par Git (environ 100 Mo, noms de vrais joueurs) ; sans lui, ces tests sont sautés avec un message.

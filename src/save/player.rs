@@ -39,6 +39,50 @@ pub struct RecordStats {
     pub craft_item_total: Option<u64>,
     pub fast_travel_unlocked: Option<u32>,
     pub game_cleared: Option<bool>,
+
+    // Exploration and collection (count of `true` flags, or sums).
+    /// Map areas discovered (`FindAreaFlagMap`).
+    pub areas_discovered: Option<u32>,
+    /// Area barriers unlocked (`AreaBarrierUnlockFlags`).
+    pub area_barriers_unlocked: Option<u32>,
+    /// World map pieces unlocked (`UnlockedWorldMapFlags`).
+    pub world_maps_unlocked: Option<u32>,
+    /// Journal notes picked up (`NoteObtainForInstanceFlag`).
+    pub notes_found: Option<u32>,
+    /// Relics picked up on the map (`RelicObtainForInstanceFlag`).
+    pub relics_picked_up: Option<u32>,
+    /// Unique world items picked up (`ItemPickupObtainForInstanceFlag`).
+    pub items_picked_up: Option<u32>,
+    /// Conversations with NPCs (sum of `NPCTalkCountMap`).
+    pub npc_talks_total: Option<u64>,
+    /// NPC achievement rewards obtained (`NPCAchivementRewardFlag`).
+    pub npc_achievements: Option<u32>,
+    /// Emotes learned from NPCs (`CompletedEmoteNPCIDArray`).
+    pub emotes_learned: Option<u32>,
+    /// Special bosses defeated, total (sum of `SpecificBossDefeatFlag`).
+    pub specific_boss_defeat_total: Option<u64>,
+
+    // Per-key details behind the totals above.
+    /// `PalCaptureBonusCount`: captures that granted a bonus, per species.
+    pub capture_bonus_by_species: BTreeMap<String, i32>,
+    /// `PalButcherCount`: pals butchered, per species.
+    pub butcher_by_species: BTreeMap<String, i32>,
+    /// `PalRankupCount`: rank-ups, per reached rank ("2".."5").
+    pub rankup_by_rank: BTreeMap<String, i32>,
+    /// `FishingCountMap`: fish caught, per fish.
+    pub fishing_by_species: BTreeMap<String, i32>,
+    /// `CraftItemCount`: items produced, per item.
+    pub craft_by_item: BTreeMap<String, i32>,
+    /// `TowerBossDefeatCount`: victories per tower boss.
+    pub tower_boss_defeats: BTreeMap<String, i32>,
+    /// `RaidBossDefeatCount`: victories per raid boss.
+    pub raid_boss_defeats: BTreeMap<String, i32>,
+    /// `ArenaSoloClearCount`: solo arena victories per rank.
+    pub arena_solo_clears: BTreeMap<String, i32>,
+    /// `RelicPossessNumMap`: relics owned per type (`CapturePower`, …).
+    pub relics_by_type: BTreeMap<String, i32>,
+    /// `SpecificBossDefeatFlag`: victories per special boss.
+    pub specific_boss_defeats: BTreeMap<String, i32>,
 }
 
 /// One player's save data.
@@ -50,11 +94,17 @@ pub struct PlayerRecord {
     pub technology_points: Option<i32>,
     pub boss_technology_points: Option<i32>,
     pub unlocked_technologies: Option<u32>,
+    /// Names of the unlocked recipes (`UnlockedRecipeTechnologyNames`).
+    pub unlocked_technology_names: Vec<String>,
     pub completed_quests: Option<u32>,
+    /// Quests in progress (`OrderedQuestArray_FullRelease`).
+    pub quests_in_progress: Option<u32>,
+    /// Skins owned, by skin name (`SkinInventoryInfo.InGameData`).
+    pub skins: BTreeMap<String, i32>,
     pub records: RecordStats,
 }
 
-fn ticks_to_utc(ticks: u64) -> Option<DateTime<Utc>> {
+pub(super) fn ticks_to_utc(ticks: u64) -> Option<DateTime<Utc>> {
     let secs = ticks.checked_sub(UNIX_EPOCH_TICKS)? / 10_000_000;
     DateTime::from_timestamp(i64::try_from(secs).ok()?, 0)
 }
@@ -145,6 +195,36 @@ impl Ctx<'_> {
         Some(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
+    /// Map with `Int` values, keyed by name. Enum keys lose their `EType::` prefix.
+    /// Absent -> empty; bad shape -> empty + warning.
+    fn int_map(&mut self, name: &str) -> BTreeMap<String, i32> {
+        let Some(m) = self.map(name) else {
+            return BTreeMap::new();
+        };
+        let mut out = BTreeMap::new();
+        let mut ok = true;
+        for (k, v) in m {
+            let key = match k {
+                Value::Name(s) | Value::Str(s) => s.as_str(),
+                Value::Enum(s) => s.rsplit("::").next().unwrap_or(s),
+                _ => {
+                    ok = false;
+                    continue;
+                }
+            };
+            match v {
+                Value::Int(i) => {
+                    out.insert(key.to_string(), *i);
+                }
+                _ => ok = false,
+            }
+        }
+        if !ok {
+            self.bad(name, "unexpected map entry type");
+        }
+        out
+    }
+
     /// Absent -> 0; present but not an array -> None + warning.
     fn array_len(&mut self, name: &str) -> Option<u32> {
         match self.props.get(name) {
@@ -193,7 +273,19 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
     let technology_points = c.int("TechnologyPoint");
     let boss_technology_points = c.int("bossTechnologyPoint");
     let unlocked_technologies = c.array_len("UnlockedRecipeTechnologyNames");
+    let unlocked_technology_names = match save.get("UnlockedRecipeTechnologyNames") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| match v {
+                Value::Name(s) | Value::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let completed_quests = c.array_len("CompletedQuestArray_FullRelease");
+    let quests_in_progress = c.array_len("OrderedQuestArray_FullRelease");
+    let skins = skins(save, &mut c);
 
     let empty = Props::default();
     let rd = match save.get("RecordData") {
@@ -210,18 +302,10 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
         warnings: &mut warnings,
     };
 
-    let mut by_species = BTreeMap::new();
     let pal_capture_total = r.sum("PalCaptureCount");
-    if let Some(Value::Map(m)) = r.props.get("PalCaptureCount") {
-        for (k, v) in m {
-            if let (Value::Name(k), Value::Int(v)) = (k, v) {
-                by_species.insert(k.clone(), *v);
-            }
-        }
-    }
     let records = RecordStats {
         pal_capture_total,
-        pal_capture_by_species: by_species,
+        pal_capture_by_species: r.int_map("PalCaptureCount"),
         species_captured: r.int("TribeCaptureCount"),
         paldeck_unlocked: r.count_true("PaldeckUnlockFlag"),
         normal_boss_defeated: r.count_true("NormalBossDefeatFlag"),
@@ -244,6 +328,26 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
         craft_item_total: r.sum("CraftItemCount"),
         fast_travel_unlocked: r.count_true("FastTravelPointUnlockFlag"),
         game_cleared: r.flag("bIsGameCleared"),
+        areas_discovered: r.count_true("FindAreaFlagMap"),
+        area_barriers_unlocked: r.count_true("AreaBarrierUnlockFlags"),
+        world_maps_unlocked: r.count_true("UnlockedWorldMapFlags"),
+        notes_found: r.count_true("NoteObtainForInstanceFlag"),
+        relics_picked_up: r.count_true("RelicObtainForInstanceFlag"),
+        items_picked_up: r.count_true("ItemPickupObtainForInstanceFlag"),
+        npc_talks_total: r.sum("NPCTalkCountMap"),
+        npc_achievements: r.count_true("NPCAchivementRewardFlag"),
+        emotes_learned: r.array_len("CompletedEmoteNPCIDArray"),
+        specific_boss_defeat_total: r.sum("SpecificBossDefeatFlag"),
+        capture_bonus_by_species: r.int_map("PalCaptureBonusCount"),
+        butcher_by_species: r.int_map("PalButcherCount"),
+        rankup_by_rank: r.int_map("PalRankupCount"),
+        fishing_by_species: r.int_map("FishingCountMap"),
+        craft_by_item: r.int_map("CraftItemCount"),
+        tower_boss_defeats: r.int_map("TowerBossDefeatCount"),
+        raid_boss_defeats: r.int_map("RaidBossDefeatCount"),
+        arena_solo_clears: r.int_map("ArenaSoloClearCount"),
+        relics_by_type: r.int_map("RelicPossessNumMap"),
+        specific_boss_defeats: r.int_map("SpecificBossDefeatFlag"),
     };
 
     Ok((
@@ -254,11 +358,48 @@ fn parse_gvas(data: &[u8]) -> Result<(PlayerRecord, Vec<ParseWarning>)> {
             technology_points,
             boss_technology_points,
             unlocked_technologies,
+            unlocked_technology_names,
             completed_quests,
+            quests_in_progress,
+            skins,
             records,
         },
         warnings,
     ))
+}
+
+/// `SkinInventoryInfo.InGameData`: array of `{SkinName, Num}`. Absent -> empty.
+fn skins(save: &Props, c: &mut Ctx) -> BTreeMap<String, i32> {
+    let mut out = BTreeMap::new();
+    let Some(info) = save.get("SkinInventoryInfo") else {
+        return out;
+    };
+    let items = match info {
+        Value::Struct { props, .. } => match props.get("InGameData") {
+            None => return out,
+            Some(Value::Array(a)) => a,
+            Some(_) => {
+                c.bad("SkinInventoryInfo.InGameData", "unexpected type");
+                return out;
+            }
+        },
+        _ => {
+            c.bad("SkinInventoryInfo", "unexpected type");
+            return out;
+        }
+    };
+    for item in items {
+        if let Value::Struct { props, .. } = item
+            && let Some(name) = props.string("SkinName")
+        {
+            let num = props
+                .int("Num")
+                .and_then(|n| i32::try_from(n).ok())
+                .unwrap_or(1);
+            out.insert(name.to_string(), num);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -324,5 +465,27 @@ mod tests {
         assert_eq!(p.records.species_captured, None);
         assert_eq!(w.len(), 1, "{w:?}");
         assert_eq!(w[0].path, ".SaveData.RecordData.TribeCaptureCount");
+    }
+
+    #[test]
+    fn int_map_strips_enum_prefix() {
+        use crate::save::gvas::build::*;
+        let doc = save_doc(|inner| {
+            // Map<EnumProperty, IntProperty> with one entry.
+            let mut payload = vec![0, 0, 0, 0, 1, 0, 0, 0];
+            payload.extend_from_slice(&fs("EPalRelicType::CapturePower"));
+            payload.extend_from_slice(&3i32.to_le_bytes());
+            let mut hdr = fs("EnumProperty");
+            hdr.extend_from_slice(&fs("IntProperty"));
+            let mut rd = Vec::new();
+            tag(&mut rd, "RelicPossessNumMap", "MapProperty", &hdr, &payload);
+            none(&mut rd);
+            let mut sh = fs("PalLocalRecordData");
+            sh.extend_from_slice(&[0u8; 16]);
+            tag(inner, "RecordData", "StructProperty", &sh, &rd);
+        });
+        let (p, w) = parse_gvas(&doc).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(p.records.relics_by_type.get("CapturePower"), Some(&3));
     }
 }

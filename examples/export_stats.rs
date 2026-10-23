@@ -16,7 +16,10 @@
 
 use chrono::Utc;
 use palworld_stats::pocketbase::{PalworldGuild, PalworldStats};
-use palworld_stats::{GuildRole, PlatformId, PlayerUid, parse_world};
+use palworld_stats::{
+    GuildRole, LevelMeta, OwnedPal, PalSummary, PlatformId, PlayerUid, parse_level_meta,
+    parse_world,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -27,6 +30,8 @@ const USAGE: &str = "usage: export_stats <world dir> [server name] [--ids <uid m
 struct Export {
     server: String,
     generated_at: String,
+    /// World name and in-game day from `LevelMeta.sav`, when present.
+    world: LevelMeta,
     players: Vec<PlayerEntry>,
     guilds: Vec<PalworldGuild>,
     warnings: Vec<palworld_stats::ParseWarning>,
@@ -44,6 +49,8 @@ struct PlayerEntry {
     guild_role: Option<GuildRole>,
     last_online: Option<String>,
     stats: PalworldStats,
+    pal_summary: PalSummary,
+    pals: Vec<OwnedPal>,
 }
 
 /// Reads the UID → platform id map. Keys are normalised so any UID spelling matches.
@@ -82,6 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let ws = parse_world(&level, players)?;
+    let world_meta = match std::fs::read(world.join("LevelMeta.sav")) {
+        Ok(raw) => parse_level_meta(&raw)?,
+        Err(_) => LevelMeta::default(),
+    };
     let now = Utc::now();
 
     let mut entries: Vec<PlayerEntry> = ws
@@ -109,6 +120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(|r| r.last_online)
                     .map(|t| t.to_rfc3339()),
                 stats: PalworldStats::from_player(&server, p.uid.as_str(), p, 0, now),
+                pal_summary: p.pal_summary.clone(),
+                pals: p.pals.clone(),
             }
         })
         .collect();
@@ -124,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let export = Export {
         server,
         generated_at: now.to_rfc3339(),
+        world: world_meta,
         players: entries,
         guilds,
         warnings: ws.warnings,

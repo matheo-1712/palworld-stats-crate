@@ -107,11 +107,12 @@ for w in &world.warnings { /* journaliser */ }
 | `palworld_stats` | `PalworldStats` | valeurs courantes, 1:1 avec le personnage : tous les compteurs ci-dessous, `playtime_seconds`, `updated_at` |
 | `palworld_sessions` | `PalworldSession` | `server`, `character`, `started_at`, `ended_at`, `duration_seconds`, `source` (`log` ou `poll`) |
 | `palworld_stats_snapshots` | `PalworldStatsSnapshot` | historique : `taken_at`, `playtime_seconds`, `level`, `exp`, `pal_capture_count`, `paldeck_unique`, `boss_defeated` (boss normaux + boss de tour). Un snapshot seulement si `differs_from` |
+| `palworld_pals` | `PalworldPal` | une ligne par Pal possédé : `server`, `character`, espèce, niveau, rang, talents, passifs (json), lucky, alpha… |
 | `palworld_guilds` | `PalworldGuild` | `server`, `guild_id`, `name`, `admin`, `member_count`, `base_count`, `base_level`, `updated_at`. Unique (`server`, `guild_id`) |
 
 IDs et relations sont des `String`, les dates du RFC 3339. Les valeurs inconnues sont des
 `Option` sérialisées en `null`. Le temps de jeu est calculé par Otternel (somme des sessions).
-`pal_capture_by_species` n'est pas stocké dans PocketBase.
+Les détails par clé (`capture_by_species`, `fishing_by_species`, `craft_by_item`, `skins`, `status_points`…) sont des champs `json` de `palworld_stats`.
 
 ## Statistiques disponibles
 
@@ -119,12 +120,18 @@ IDs et relations sont des `String`, les dates du RFC 3339. Les valeurs inconnues
   serveur : FPS, joueurs, uptime, jour en jeu, bases.
 - **Identité / progression** : nom, `PlayerUid`, dernière connexion, niveau, XP, rang d'arène,
   points de technologie (normaux et boss), technologies débloquées, quêtes terminées.
-- **Pals** : possédés, captures (total et par espèce), espèces capturées, Paldeck, éveils,
-  rangs, mutations, Pals abattus.
+- **Pals** : captures (total et par espèce), espèces capturées, Paldeck, éveils, rangs,
+  mutations, Pals abattus ; **chaque Pal possédé** (espèce, alpha, lucky, niveau, rang, âmes,
+  talents, passifs, éveil, skin, amitié, date d'obtention) et son résumé (`PalSummary`).
 - **Combat** : boss vaincus, boss de tour, raids, prédateurs, camps conquis, arène solo,
   plateformes pétrolières.
 - **Exploration / artisanat** : donjons (normaux et fixes), trésors, reliques, pêche, objets
   fabriqués, voyages rapides débloqués, jeu terminé.
+- **Exploration / collection** : zones découvertes, barrières, cartes, notes, reliques et objets
+  ramassés, conversations et récompenses PNJ, emotes, skins, quêtes en cours.
+- **Détails par clé** : par espèce (captures, bonus, abattus), par poisson, par objet fabriqué,
+  par boss (tour, raid, spéciaux), par rang (arène, condensation), par type de relique.
+- **Personnage** : points de statut attribués ; **monde** (`parse_level_meta`) : nom, jour en jeu.
 - **Guilde** : guilde, rôle (admin ou membre), membres, bases, niveau des bases.
 
 **Non disponibles** (absentes des sauvegardes) : morts, victimes (kills), distance parcourue,

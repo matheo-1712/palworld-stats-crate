@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::container::decompress;
 use super::gvas::{self, ParseOptions, Props, Value};
+use super::player::ticks_to_utc;
 use super::rawdata::{GroupRaw, GuildMember, decode_character, decode_group};
 use crate::{GuildId, ParseWarning, PlayerUid, Result};
 
@@ -22,6 +24,51 @@ pub struct CharacterInfo {
     pub exp: Option<i64>,
     pub arena_rank_point: Option<i32>,
     pub group_id: Option<GuildId>,
+    /// Status points spent per stat (`GotStatusPointList`). Keys are the game's internal
+    /// (Japanese) stat names, e.g. `最大HP`.
+    pub status_points: BTreeMap<String, i32>,
+    /// Extra status points per stat (`GotExStatusPointList`), same keys.
+    pub ex_status_points: BTreeMap<String, i32>,
+}
+
+/// One pal owned by a player.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OwnedPal {
+    /// Species id (`CharacterID`), e.g. `WoolFox`. Alpha pals keep their `BOSS_` prefix.
+    pub species: String,
+    /// Captured alpha (species id starts with `BOSS_`).
+    pub is_alpha: bool,
+    /// Lucky / shiny pal (`IsRarePal`).
+    pub is_lucky: bool,
+    /// Level (1 when absent from the save).
+    pub level: u8,
+    pub exp: i64,
+    pub nickname: Option<String>,
+    /// `Male` / `Female`, without the enum prefix.
+    pub gender: Option<String>,
+    /// Condensation rank, 1 (base) to 5 (4 stars).
+    pub rank: u8,
+    /// Soul upgrades (`Rank_HP`, `Rank_Attack`, `Rank_Defence`, `Rank_CraftSpeed`).
+    pub soul_hp: u8,
+    pub soul_attack: u8,
+    pub soul_defense: u8,
+    pub soul_craft_speed: u8,
+    /// IVs (`Talent_HP`, `Talent_Shot`, `Talent_Defense`), 0–100.
+    pub talent_hp: u8,
+    pub talent_attack: u8,
+    pub talent_defense: u8,
+    /// Passive skill ids (`PassiveSkillList`).
+    pub passives: Vec<String>,
+    /// Active skills learned (`MasteredWaza`).
+    pub skills_learned: u32,
+    /// Awakened (`bIsAwakening`).
+    pub awakened: bool,
+    /// Applied skin (`SkinName`).
+    pub skin: Option<String>,
+    /// Friendship points (`FriendshipPoint`).
+    pub friendship: i32,
+    /// When the pal was obtained (`OwnedTime`).
+    pub obtained_at: Option<DateTime<Utc>>,
 }
 
 /// A guild (group of type Guild).
@@ -41,7 +88,80 @@ pub struct LevelSave {
     pub players: Vec<CharacterInfo>,
     /// Number of pals owned per player.
     pub owned_pals: BTreeMap<PlayerUid, u32>,
+    /// Every pal owned, per player.
+    pub pals: BTreeMap<PlayerUid, Vec<OwnedPal>>,
     pub guilds: Vec<GuildInfo>,
+}
+
+/// Integer property clamped into `u8`; absent -> `default`.
+fn small(props: &Props, name: &str, default: u8) -> u8 {
+    props.int(name).map_or(default, |v| {
+        u8::try_from(v.clamp(0, 255)).unwrap_or(default)
+    })
+}
+
+/// `[{StatusName, StatusPoint}]` -> map. Absent -> empty.
+fn status_points(props: &Props, name: &str) -> BTreeMap<String, i32> {
+    let mut out = BTreeMap::new();
+    if let Some(Value::Array(a)) = props.get(name) {
+        for item in a {
+            if let Value::Struct { props, .. } = item
+                && let Some(stat) = props.string("StatusName")
+            {
+                let pts = props
+                    .int("StatusPoint")
+                    .and_then(|v| i32::try_from(v).ok())
+                    .unwrap_or(0);
+                out.insert(stat.to_string(), pts);
+            }
+        }
+    }
+    out
+}
+
+fn owned_pal(sp: &Props) -> OwnedPal {
+    let species = sp.string("CharacterID").unwrap_or_default().to_string();
+    let names = |name: &str| -> Vec<String> {
+        match sp.get(name) {
+            Some(Value::Array(a)) => a
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Name(s) | Value::Str(s) | Value::Enum(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    OwnedPal {
+        is_alpha: species.to_ascii_uppercase().starts_with("BOSS_"),
+        species,
+        is_lucky: sp.bool("IsRarePal").unwrap_or(false),
+        // Absent properties are engine defaults: level 1, rank 1, everything else 0.
+        level: small(sp, "Level", 1),
+        exp: sp.int("Exp").unwrap_or(0),
+        nickname: sp.string("NickName").map(str::to_string),
+        gender: sp
+            .string("Gender")
+            .map(|g| g.rsplit("::").next().unwrap_or(g).to_string()),
+        rank: small(sp, "Rank", 1),
+        soul_hp: small(sp, "Rank_HP", 0),
+        soul_attack: small(sp, "Rank_Attack", 0),
+        soul_defense: small(sp, "Rank_Defence", 0),
+        soul_craft_speed: small(sp, "Rank_CraftSpeed", 0),
+        talent_hp: small(sp, "Talent_HP", 0),
+        talent_attack: small(sp, "Talent_Shot", 0),
+        talent_defense: small(sp, "Talent_Defense", 0),
+        passives: names("PassiveSkillList"),
+        skills_learned: u32::try_from(names("MasteredWaza").len()).unwrap_or(u32::MAX),
+        awakened: sp.bool("bIsAwakening").unwrap_or(false),
+        skin: sp.string("SkinName").map(str::to_string),
+        friendship: sp
+            .int("FriendshipPoint")
+            .and_then(|v| i32::try_from(v).ok())
+            .unwrap_or(0),
+        obtained_at: sp.datetime("OwnedTime").and_then(ticks_to_utc),
+    }
 }
 
 fn warn(warnings: &mut Vec<ParseWarning>, path: String, message: impl Into<String>) {
@@ -194,11 +314,14 @@ fn character(
             exp,
             arena_rank_point: arena,
             group_id,
+            status_points: status_points(sp, "GotStatusPointList"),
+            ex_status_points: status_points(sp, "GotExStatusPointList"),
         });
     } else if let Some(owner) = sp.guid("OwnerPlayerUId") {
         let owner = PlayerUid::from_guid(&owner);
         if !owner.is_nil() {
-            *level.owned_pals.entry(owner).or_insert(0) += 1;
+            *level.owned_pals.entry(owner.clone()).or_insert(0) += 1;
+            level.pals.entry(owner).or_default().push(owned_pal(sp));
         }
     } else if sp.get("OwnerPlayerUId").is_some() {
         warn(w, format!("{sp_path}.OwnerPlayerUId"), "unexpected type");
